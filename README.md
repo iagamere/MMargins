@@ -1,7 +1,7 @@
 # MARGINS — A quieter way to read
 
 A local-first EPUB & PDF reader for Android (also runs in any modern browser as an installable PWA).
-No account, no server: your books never leave the device.
+Works fully offline with no account. An optional online account (Google sign-in + Supabase, see `docs/ONLINE_SETUP.md`) lets you publish books to a private online library and visit other people's libraries by `@handle`; nothing is ever shared unless you choose it.
 
 **Stack:** React 18 · TypeScript · Vite · Capacitor 8 (Android) · epub.js · PDF.js · IndexedDB (`idb`) · Zustand · Lucide icons · bundled fonts (Inter, Literata, Source Serif 4, Noto Naskh Arabic, IBM Plex Sans Arabic — all SIL OFL).
 

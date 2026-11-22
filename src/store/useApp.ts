@@ -37,7 +37,10 @@ interface AppState {
   /** books currently going up to / coming down from Drive */
   transfers: Record<string, { kind: 'up' | 'down'; pct: number }>;
   syncing: boolean;
+  /** somebody else's book being read (stage 3b). Not part of `books`: it never shows in the library. */
+  visitorBook: BookRecord | null;
 
+  setVisitorBook(b: BookRecord | null): void;
   setAccount(a: Account | null): void;
   setTransfer(id: string, t: { kind: 'up' | 'down'; pct: number } | null): void;
   syncNow(quiet?: boolean): Promise<void>;
@@ -87,6 +90,11 @@ export const useApp = create<AppState>((set, get) => ({
   account: loadAccount(),
   transfers: {},
   syncing: false,
+  visitorBook: null,
+
+  setVisitorBook(b) {
+    set({ visitorBook: b });
+  },
 
   setAccount(a) {
     set({ account: a });
@@ -116,7 +124,10 @@ export const useApp = create<AppState>((set, get) => ({
 
   async init() {
     try {
-      const books = await getAllBooks();
+      const all = await getAllBooks();
+      // a visitor copy left by a closed app is removed (read-only copies never outlive the reader)
+      const books = all.filter((b) => !b.visitor);
+      for (const b of all) if (b.visitor) void deleteBook(b.id).catch(() => undefined);
       const shelves = await getShelves().catch(() => [] as ShelfRecord[]);
       set({ books, shelves, booksLoaded: true });
       // Covers saved earlier still carry their white page margins: clean them once, in the background.
@@ -297,6 +308,10 @@ export const useApp = create<AppState>((set, get) => ({
 
   updateBook(id, patch) {
     set({ books: get().books.map((b) => (b.id === id ? { ...b, ...patch } : b)) });
+    if (get().visitorBook?.id === id) {
+      set({ visitorBook: { ...get().visitorBook!, ...patch } });
+      return; // nothing of a visitor copy is kept
+    }
     void patchBook(id, patch).catch(() => undefined);
   },
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, BookOpen, ChevronDown, ChevronUp, Pencil, Plus, Settings2, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, BookOpen, ChevronDown, ChevronUp, Pencil, Plus, Search, Settings2, Trash2, Upload } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useOnline } from '../store/useOnline';
 import { useT } from '../lib/i18n';
@@ -14,6 +14,7 @@ import { Sheet } from '../components/Sheet';
 import { AddBooksSheet, BookSheet, ShelfBooksSheet, shelfModesOf } from '../components/OnlineBooks';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AccessBadge, AccessPicker, PasswordBlock, PublicConfirm, codeOf } from '../components/AccessControls';
+import { VisitSheet } from './Visit';
 
 type Pending = { to: ShelfAccess; run: () => void } | null;
 
@@ -189,6 +190,7 @@ export function OnlineLibraryScreen() {
   const [editLib, setEditLib] = useState(false);
   const [editing, setEditing] = useState<OnlineShelf | 'new' | null>(null);
   const [deleting, setDeleting] = useState<OnlineShelf | null>(null);
+  const [visiting, setVisiting] = useState(false);
 
   const goBack = () => { if (!back()) navigate({ name: 'library' }, { replace: true }); };
 
@@ -383,7 +385,9 @@ export function OnlineLibraryScreen() {
           </div>
           <h1>{t('onlineLib.title')}</h1>
         </header>
+        {onlineConfigured && <div className="acc-actions" style={{ marginBottom: 6 }}><button className="btn btn-sm" onClick={() => setVisiting(true)}><Search size={16} aria-hidden="true" />{t('visit.open')}</button></div>}
         {body}
+        {visiting && <VisitSheet onClose={() => setVisiting(false)} />}
       </div>
     </div>
   );

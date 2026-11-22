@@ -43,7 +43,7 @@ type Panel = null | 'toc' | 'search' | 'notes' | 'typo';
 
 export function ReaderScreen({ id }: { id: string }) {
   const { t, n, lang } = useT();
-  const book = useApp((s) => s.books.find((b) => b.id === id));
+  const book = useApp((s) => s.books.find((b) => b.id === id) ?? (s.visitorBook?.id === id ? s.visitorBook : undefined));
   const allBooks = useApp((s) => s.books);
   const settings = useApp((s) => s.settings);
   const resolved = useApp((s) => s.resolvedTheme);

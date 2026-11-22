@@ -27,7 +27,8 @@ export const onlineConfigured = !!URL_BASE && !!ANON_KEY;
 
 export type OnlineErrorCode =
   | 'notConfigured' | 'offline' | 'notSignedIn' | 'sessionExpired' | 'handleTaken' | 'handleInvalid' | 'handleReserved'
-  | 'handleCooldown' | 'alreadyHasProfile' | 'rateLimited' | 'quota' | 'passwordInvalid' | 'notFound' | 'duplicate' | 'tooLarge' | 'uploadFailed' | 'unknown';
+  | 'handleCooldown' | 'alreadyHasProfile' | 'rateLimited' | 'quota' | 'passwordInvalid' | 'notFound' | 'duplicate' | 'tooLarge' | 'uploadFailed'
+  | 'profileRequired' | 'fileUnavailable' | 'cancelled' | 'unknown';
 
 export class OnlineError extends Error {
   code: OnlineErrorCode;
@@ -96,6 +97,8 @@ export function mapError(status: number, body: unknown): OnlineError {
   if (code === '23514' && /handle/.test(msg)) return new OnlineError('handleInvalid', msg);
   if (code === '23505' && /books_owner_id_file_hash/.test(msg)) return new OnlineError('duplicate', msg);
   if (status === 413 || String(b.statusCode ?? '') === '413' || /exceeded the maximum allowed size/i.test(msg)) return new OnlineError('tooLarge', msg);
+  // a password grant needs the visitor's own profile (access_grants.user_id references profiles)
+  if (code === '23503' && /access_grants/.test(msg)) return new OnlineError('profileRequired', msg);
   if (/upload_missing/.test(msg)) return new OnlineError('uploadFailed', msg);
   if (/password_invalid/.test(msg)) return new OnlineError('passwordInvalid', msg);
   if (/not_found/.test(msg)) return new OnlineError('notFound', msg);
@@ -496,3 +499,162 @@ export async function publishBookFile(book: Pick<OnlineBook, 'id' | 'format' | '
   }
   if ((await finalizeBookUpload(book.id)) !== 'ready') throw new OnlineError('uploadFailed', 'verification_failed');
 }
+
+/* ============================================================ visiting (stage 3b) */
+export type VisitState = 'open' | 'locked' | 'unavailable';
+export interface VisitShelf {
+  id: string;
+  state: 'open' | 'locked';
+  /** only when open: a locked shelf reveals nothing about itself */
+  name?: string;
+  description?: string;
+  position: number;
+}
+export interface VisitResult {
+  profile: OnlineProfile;
+  library: { id: string; state: VisitState; title?: string; description?: string };
+  shelves: VisitShelf[];
+  /** books with their own password that are not unlocked yet (ids only) */
+  locked_books: { id: string }[];
+}
+/** a book of somebody else, as far as the database lets this visitor see it */
+export interface VisitedBook {
+  id: string;
+  owner_id: string;
+  title: string;
+  author: string;
+  description: string;
+  language: string | null;
+  format: 'epub' | 'pdf';
+  file_size: number;
+  file_status: 'pending' | 'ready' | 'failed';
+  has_cover: boolean;
+  read_allowed: boolean;
+  download_allowed: boolean;
+}
+
+/** signed-out visitors may open public libraries (the anon key); a signed-in visitor always uses her own session */
+const maybeAuthed = (path: string, init: RequestInit & { json?: unknown } = {}) => (hasSession() ? authed(path, init) : send(path, init));
+
+/** Opens a library by @handle. Unknown and blocked look the same (notFound). */
+export async function visitLibrary(handle: string): Promise<VisitResult> {
+  const h = normalizeHandle(handle);
+  if (!h) throw new OnlineError('notFound');
+  const r = (await maybeAuthed('/rest/v1/rpc/visit_library', { method: 'POST', json: { p_handle: h } })) as VisitResult | null;
+  if (!r?.profile || !r.library) throw new OnlineError('notFound');
+  return { ...r, shelves: r.shelves ?? [], locked_books: r.locked_books ?? [] };
+}
+
+const VISIT_COLS = 'id,owner_id,title,author,description,language,format,file_size,file_status,has_cover,read_allowed,download_allowed';
+const PAGE = 1000;
+
+/** every book of `ownerId` that row-level security lets this visitor see (ready books only) */
+export async function listVisitedBooks(ownerId: string): Promise<VisitedBook[]> {
+  const out: VisitedBook[] = [];
+  for (let offset = 0; offset < 4000; offset += PAGE) {
+    const rows = (await maybeAuthed(
+      `/rest/v1/books?owner_id=eq.${encodeURIComponent(ownerId)}&select=${VISIT_COLS}&order=created_at.desc&limit=${PAGE}&offset=${offset}`,
+    )) as VisitedBook[];
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  // the owner looking at her own library also receives unfinished uploads: nobody else ever does
+  return out.filter((b) => b.file_status === 'ready');
+}
+
+export async function listVisitedShelfLinks(ownerId: string): Promise<ShelfLink[]> {
+  const out: ShelfLink[] = [];
+  for (let offset = 0; offset < 4000; offset += PAGE) {
+    const rows = (await maybeAuthed(
+      `/rest/v1/shelf_books?owner_id=eq.${encodeURIComponent(ownerId)}&select=shelf_id,book_id,position&order=position.asc&limit=${PAGE}&offset=${offset}`,
+    )) as ShelfLink[];
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return out;
+}
+
+/** true = unlocked for 24 hours. A wrong password and an unknown resource look the same. */
+export async function redeemPassword(type: ProtectedType, id: string, password: string): Promise<boolean> {
+  return (await rpc('redeem_access_password', { p_type: type, p_id: id, p_password: password })) === true;
+}
+
+/**
+ * Fetches a stored file with the visitor's own session token. The storage policy re-checks, on EVERY request,
+ * that she may read / download this book, so there is no link that could be forwarded or reused later
+ * (the reason this does not use long-lived signed URLs). Resolves only with a file of the size the owner declared.
+ */
+export async function fetchStoredFile(
+  bucket: 'books' | 'covers',
+  ownerId: string,
+  bookId: string,
+  ext: 'epub' | 'pdf' | 'jpg',
+  opts: { expectedSize?: number; onProgress?: (fraction: number) => void; signal?: AbortSignal } = {},
+): Promise<Blob> {
+  if (!onlineConfigured) throw new OnlineError('notConfigured');
+  const url = `${URL_BASE}/storage/v1/object/authenticated/${bucket}/${encodeURIComponent(ownerId)}/${encodeURIComponent(bookId)}.${ext}`;
+  const attempt = async (tok: string): Promise<Response> => {
+    try {
+      return await fetch(url, { headers: { apikey: ANON_KEY, Authorization: `Bearer ${tok}` }, signal: opts.signal });
+    } catch {
+      throw new OnlineError(opts.signal?.aborted ? 'cancelled' : 'offline');
+    }
+  };
+  let res = await attempt(await token());
+  if (res.status === 401 && readSession()) res = await attempt((await refresh(readSession()!)).access_token);
+  if (!res.ok) throw res.status === 429 ? new OnlineError('rateLimited') : res.status >= 500 ? new OnlineError('unknown', `HTTP ${res.status}`) : new OnlineError('fileUnavailable');
+  let blob: Blob;
+  const total = Number(res.headers?.get?.('content-length')) || opts.expectedSize || 0;
+  if (opts.onProgress && res.body && typeof res.body.getReader === 'function' && total > 0) {
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let got = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.byteLength;
+        opts.onProgress(Math.min(1, got / total));
+      }
+    } catch {
+      throw new OnlineError(opts.signal?.aborted ? 'cancelled' : 'offline');
+    }
+    blob = new Blob(chunks as BlobPart[]);
+  } else {
+    blob = await res.blob();
+  }
+  if (opts.expectedSize !== undefined && blob.size !== opts.expectedSize) throw new OnlineError('fileUnavailable', 'size_mismatch');
+  return blob;
+}
+
+export const downloadBookFile = (b: Pick<VisitedBook, 'id' | 'owner_id' | 'format' | 'file_size'>, onProgress?: (f: number) => void, signal?: AbortSignal) =>
+  fetchStoredFile('books', b.owner_id, b.id, b.format, { expectedSize: b.file_size, onProgress, signal });
+
+/* covers: fetched lazily, a few at a time, kept for the session */
+const coverCache = new Map<string, Promise<Blob | null>>();
+let coverActive = 0;
+const coverQueue: (() => void)[] = [];
+const coverSlot = () => new Promise<void>((go) => (coverActive < 4 ? (coverActive++, go()) : coverQueue.push(() => (coverActive++, go()))));
+const coverFree = () => { coverActive--; coverQueue.shift()?.(); };
+
+export function fetchCover(ownerId: string, bookId: string): Promise<Blob | null> {
+  const key = `${ownerId}/${bookId}`;
+  let p = coverCache.get(key);
+  if (!p) {
+    p = (async () => {
+      await coverSlot();
+      try {
+        return await fetchStoredFile('covers', ownerId, bookId, 'jpg');
+      } catch {
+        coverCache.delete(key); // retry next time (offline, expired session...)
+        return null; // a missing cover is never an error
+      } finally {
+        coverFree();
+      }
+    })();
+    coverCache.set(key, p);
+  }
+  return p;
+}
+export const clearCoverCache = () => coverCache.clear();

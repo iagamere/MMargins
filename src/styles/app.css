@@ -432,3 +432,10 @@ textarea.textarea:focus-visible { outline: none; border-color: var(--accent); }
 .nav-fab .acc-dot { inset-inline-end: 3px; bottom: 3px; width: 14px; height: 14px; border-color: var(--bg); }
 .nav-fab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .has-fab .nav-item { font-size: 11px; min-width: 0; }
+
+/* stage 3b: visiting another library */
+.visit-row { align-items: flex-start; }
+.visit-cover { flex: none; width: 48px; aspect-ratio: 2 / 3; border-radius: 6px; overflow: hidden; background: var(--bg2); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--fg2); }
+.visit-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.visit-row .olib-main { flex: 1 1 auto; }
+.visit-tools { flex-direction: column; align-items: flex-end; gap: 6px; }

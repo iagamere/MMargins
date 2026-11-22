@@ -12,14 +12,21 @@ const store = new Map<string, string>();
 
 type Call = { url: string; init: any };
 let calls: Call[] = [];
-let handler: (c: Call) => { status?: number; body?: unknown } | 'network';
+let handler: (c: Call) => { status?: number; body?: unknown; raw?: Uint8Array } | 'network';
 (globalThis as any).fetch = async (url: string, init: any) => {
   const c = { url, init };
   calls.push(c);
   const r = handler(c);
   if (r === 'network') throw new TypeError('network down');
   const status = r.status ?? 200;
-  return { ok: status >= 200 && status < 300, status, text: async () => (r.body === undefined ? '' : JSON.stringify(r.body)) };
+  const raw = (r as { raw?: Uint8Array }).raw;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: () => null },
+    text: async () => (r.body === undefined ? '' : JSON.stringify(r.body)),
+    blob: async () => new Blob([raw ?? new Uint8Array(0)]),
+  };
 };
 
 const online = await import('../src/lib/online');
@@ -316,5 +323,114 @@ describe('upload', () => {
     await online.removeBookFiles([{ id: 'b1', format: 'pdf' }]);
     expect(JSON.parse(calls[1].init.body)).toEqual({ prefixes: ['u1/b1.pdf'] });
     expect(calls[1].init.method).toBe('DELETE');
+  });
+});
+
+describe('visiting (stage 3b)', () => {
+  const owner = 'o1';
+  const vbook = { id: 'b1', owner_id: owner, format: 'epub' as const, file_size: 4 };
+
+  test('a signed-out visitor opens a library with the anon key; the handle is normalised', async () => {
+    handler = () => ({ body: { profile: { id: owner, handle: 'alice', display_name: 'A', bio: '' }, library: { id: 'l1', state: 'open' } } });
+    const r = await online.visitLibrary('  @Alice ');
+    expect(r.library.state).toBe('open');
+    expect(r.shelves).toEqual([]);
+    expect(r.locked_books).toEqual([]);
+    expect(calls[0].url).toContain('/rest/v1/rpc/visit_library');
+    expect(JSON.parse(calls[0].init.body)).toEqual({ p_handle: 'alice' });
+    expect(calls[0].init.headers.apikey).toBe('anon-key');
+  });
+
+  test('a signed-in visitor uses her own token', async () => {
+    seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3600, user_id: 'u1' });
+    handler = () => ({ body: { profile: { id: owner, handle: 'alice', display_name: 'A', bio: '' }, library: { id: 'l1', state: 'locked' } } });
+    await online.visitLibrary('alice');
+    expect(calls[0].init.headers.Authorization).toBe('Bearer AT');
+  });
+
+  test('unknown / blocked handle is notFound; an empty handle never reaches the network', async () => {
+    handler = () => ({ status: 400, body: { code: 'P0001', message: 'not_found' } });
+    await expect(online.visitLibrary('ghost')).rejects.toMatchObject({ code: 'notFound' });
+    calls = [];
+    await expect(online.visitLibrary('  @ ')).rejects.toMatchObject({ code: 'notFound' });
+    expect(calls.length).toBe(0);
+  });
+
+  test('visible books: only ready ones, and the list is paged', async () => {
+    const page = (n: number, status = 'ready') => Array.from({ length: n }, (_, i) => ({ id: `b${i}`, file_status: status }));
+    let n = 0;
+    handler = (c) => {
+      n++;
+      expect(c.url).toContain('owner_id=eq.o1');
+      return { body: n === 1 ? page(1000) : [...page(2), { id: 'x', file_status: 'pending' }] };
+    };
+    const list = await online.listVisitedBooks(owner);
+    expect(list.length).toBe(1002);
+    expect(calls[1].url).toContain('offset=1000');
+  });
+
+  test('redeeming a password: true, false, and the profile-required case', async () => {
+    seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3600, user_id: 'u1' });
+    handler = () => ({ body: true });
+    expect(await online.redeemPassword('shelf', 's1', 'pw-pw-pw-1')).toBe(true);
+    expect(JSON.parse(calls[0].init.body)).toEqual({ p_type: 'shelf', p_id: 's1', p_password: 'pw-pw-pw-1' });
+    handler = () => ({ body: false });
+    expect(await online.redeemPassword('book', 'b1', 'x')).toBe(false);
+    handler = () => ({ status: 409, body: { code: '23503', message: 'insert or update on table "access_grants" violates foreign key constraint' } });
+    await expect(online.redeemPassword('book', 'b1', 'x')).rejects.toMatchObject({ code: 'profileRequired' });
+    store.clear();
+    online.reloadSessionFromStorage();
+    await expect(online.redeemPassword('book', 'b1', 'x')).rejects.toMatchObject({ code: 'notSignedIn' });
+  });
+
+  test('downloading uses the session token on the authenticated route (no signed link)', async () => {
+    seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3600, user_id: 'u1' });
+    handler = () => ({ raw: new Uint8Array(4) });
+    const blob = await online.downloadBookFile(vbook);
+    expect(blob.size).toBe(4);
+    expect(calls[0].url).toBe('https://proj.supabase.test/storage/v1/object/authenticated/books/o1/b1.epub');
+    expect(calls[0].init.headers.Authorization).toBe('Bearer AT');
+    expect(calls[0].url).not.toContain('token=');
+  });
+
+  test('a file of the wrong size is refused', async () => {
+    seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3600, user_id: 'u1' });
+    handler = () => ({ raw: new Uint8Array(9) });
+    await expect(online.downloadBookFile(vbook)).rejects.toMatchObject({ code: 'fileUnavailable' });
+  });
+
+  test('download errors: denied -> fileUnavailable, 429, 5xx, offline, signed out', async () => {
+    seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3600, user_id: 'u1' });
+    handler = () => ({ status: 400, body: { statusCode: '404', error: 'not_found' } });
+    await expect(online.downloadBookFile(vbook)).rejects.toMatchObject({ code: 'fileUnavailable' });
+    handler = () => ({ status: 429 });
+    await expect(online.downloadBookFile(vbook)).rejects.toMatchObject({ code: 'rateLimited' });
+    handler = () => ({ status: 503 });
+    await expect(online.downloadBookFile(vbook)).rejects.toMatchObject({ code: 'unknown' });
+    handler = () => 'network';
+    await expect(online.downloadBookFile(vbook)).rejects.toMatchObject({ code: 'offline' });
+    store.clear();
+    online.reloadSessionFromStorage();
+    await expect(online.downloadBookFile(vbook)).rejects.toMatchObject({ code: 'notSignedIn' });
+  });
+
+  test('an expired token is refreshed once and the download retried', async () => {
+    seed({ access_token: 'OLD', refresh_token: 'RT', expires_at: now() + 3600, user_id: 'u1' });
+    handler = (c) => (c.url.includes('grant_type=refresh_token') ? { body: session({ access_token: 'NEW' }) } : c.init.headers.Authorization === 'Bearer OLD' ? { status: 401 } : { raw: new Uint8Array(4) });
+    expect((await online.downloadBookFile(vbook)).size).toBe(4);
+    expect(calls.at(-1)!.init.headers.Authorization).toBe('Bearer NEW');
+  });
+
+  test('covers: fetched from the covers bucket, cached, a failure is null and retried later', async () => {
+    seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3600, user_id: 'u1' });
+    online.clearCoverCache();
+    handler = () => ({ raw: new Uint8Array(3) });
+    expect((await online.fetchCover(owner, 'c1'))!.size).toBe(3);
+    await online.fetchCover(owner, 'c1');
+    expect(calls.filter((c) => c.url.includes('/covers/o1/c1.jpg')).length).toBe(1);
+    handler = () => ({ status: 400, body: {} });
+    expect(await online.fetchCover(owner, 'c2')).toBeNull();
+    handler = () => ({ raw: new Uint8Array(1) });
+    expect((await online.fetchCover(owner, 'c2'))!.size).toBe(1);
   });
 });

@@ -51,6 +51,8 @@ export interface BookRecord {
   remoteOnly?: boolean;
   /** the file on this device is a temporary copy for "read online": deleted when the reader closes */
   tempRead?: boolean;
+  /** somebody else's book opened for reading (stage 3b): never in the library, deleted when the reader closes */
+  visitor?: boolean;
   /** ids of bookmarks/notes deleted here, with the time: so a deletion also reaches the other devices */
   annDeleted?: Record<string, number>;
   /** version stamp of the last reading state (progress, notes) exchanged with Drive */
@@ -143,6 +145,7 @@ export type Route =
   | { name: 'settings' }
   | { name: 'account' }
   | { name: 'onlineLibrary' }
+  | { name: 'visit'; handle: string }
   | { name: 'details'; id: string }
   | { name: 'reader'; id: string };
 

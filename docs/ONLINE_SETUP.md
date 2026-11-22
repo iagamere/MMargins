@@ -8,7 +8,7 @@
 | 2a | My online library screen: library settings, shelves (create / edit / delete / reorder), privacy per library and shelf (public / password / friends / private / same as library), password set / change / remove / revoke | **done in code — needs your test** |
 | 2b | Add books from the device (metadata record + rights confirmation), books inside shelves (add / remove / reorder), per-book privacy, read / download permissions, per-book password | **done in code — needs your test** |
 | 3a | File upload to private storage (owner only): bucket + storage policies (`0004_storage.sql`), size verification by the database, upload button / progress / retry in the app, file cleanup on book and account deletion | **done in code — needs migration 0004 on your project + your test** |
-| 3b | Read / download by visitors (signed URLs), import to local library, open another person's library by `@handle` + password prompt | not started |
+| 3b | Visitors: open a library by `@handle`, unlock password-protected library / shelf / book, read (temporary copy) and download (import to the local library); covers; storage policy extended (`0005_visitors.sql`) | **done in code — needs migration 0005 + your test** |
 | 3c | Discovery + search | not started |
 | 4 | Friends, blocks and subscriptions UI | not started (database + RPCs already exist and are tested) |
 | 5 | Notifications (in-app inbox, preferences; push design) and reports / takedown | not started |
@@ -44,6 +44,7 @@ Labels: **[code]** = already in the repo, **[you]** = you must do it, **[pending
    * Delete the online account from the app → both rows disappear.
 8. **[you, stage 3a]** Run `supabase/migrations/0004_storage.sql` in the SQL Editor (New query → paste → Run). It creates the private `books` and `covers` buckets and the storage policies. Check Storage → Buckets: both must appear and be **Private**. No Edge Function is needed for 3a (verification is a database function).
    *Limits:* the free plan allows 50 MB per file and 1 GB of storage in total; the app refuses bigger files. Raise `file_size_limit` in the migration on a paid plan.
+8b. **[you, stage 3b]** Run `supabase/migrations/0005_visitors.sql` in the SQL Editor (after 0004). It replaces the storage SELECT policy (owner **or** an allowed visitor) and adds `visit_library(handle)`. No Edge Function, no new secret, no dashboard setting.
 9. **[pending, stage 5]** Android push (Firebase Cloud Messaging credentials). Until then notifications will be in-app only; this will not be presented as push.
 
 **Costs / limits to verify yourself** (they change; I cannot check them from here): Supabase free-tier database size, storage size, egress, monthly active users, and the rule that free projects are paused after a period of inactivity. Check https://supabase.com/pricing before inviting users. Books are up to 150 MB each (enforced by a database constraint), which is the quota most likely to matter.
@@ -90,7 +91,7 @@ Security design choices:
 ## 5. Tests
 
 ```bash
-# database privacy suite — 133 checks + 28 storage checks on a throwaway local Postgres (>= 15)
+# database privacy suite — 133 checks + 28 storage + 63 visitor checks on a throwaway local Postgres (>= 15)
 PGHOST=/path/to/socket PGPORT=5432 PGUSER=postgres npm run test:db
 # client logic (handle rules, token exchange, refresh, error mapping)
 npm test          # needs bun: https://bun.sh
@@ -113,3 +114,6 @@ npm run typecheck && npm run build
 
 * Stage 3a: tested against a mock of Supabase Storage (the `storage.objects` table and RLS), not against a real Storage server. The one assumption to verify on your project: after an upload, `storage.objects.metadata->>'size'` holds the byte size (it does on current Supabase) — `finalize_book_upload` relies on it. If a book stays «failed» after upload, this is the first thing to check.
 * Stage 3a: deleting the stored files is done by the app (best effort) before deleting a book or the account; if the network drops in between, orphan files can remain until stage 5 adds a server-side clean-up. A published file cannot be replaced (delete the book record and add it again).
+
+* Stage 3b design: (1) **No signed links.** The app downloads with the visitor's own session token through `GET /storage/v1/object/authenticated/...`; the storage policy (`private.object_readable`, which calls the same `can_read_book_file` / `can_download_book_file` / `can_view_book` as the table rules) is evaluated on every request, so there is no URL that can be forwarded or that outlives a changed password or privacy setting. (2) **Files need a signed-in visitor** (anonymous visitors can still browse public libraries and see book metadata, not fetch files). (3) `visit_library` is the one entry point: unknown handle and blocked user both answer `not_found`; a locked library / shelf / book shows only its id (never its name, title or count); a shelf that merely inherits a locked library is not listed separately; a password that was never set is shown as unavailable, not as lockable.
+* Stage 3b limits you should know: **"read only" is not copy protection.** A visitor allowed to read receives the file bytes, so a technically skilled person could keep them; `read_allowed` without `download_allowed` only removes the in-app save button and keeps the copy temporary. If a book must never leave your device, do not publish it. A book opened with "Read" is deleted from the visitor's device when the reader closes (record, bookmarks and notes included) and any leftover is removed at the next app start; if the visitor already owns the same file, her own copy opens instead. Unlocking a password needs the visitor to have an online profile (the grant table references profiles): without one the app says so. The size of a download is checked against the size the owner declared; the hash cannot be checked (it is never exposed to others). Tested: 63 SQL checks on the mock Storage plus 10 client tests; **not** tested against a real Supabase Storage server, and the new screen was type-checked only against stubs (see above).

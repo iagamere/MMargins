@@ -1,5 +1,5 @@
 import { useApp } from '../store/useApp';
-import { deleteAnnotation, deleteBookFile, getAnnotations, getFile, kvGet, kvSet, putAnnotation, putBookRecord, putFile, saveShelves } from './db';
+import { deleteAnnotation, deleteBook, deleteBookFile, getAnnotations, getFile, kvGet, kvSet, putAnnotation, putBookRecord, putFile, saveShelves } from './db';
 import { deleteFile, downloadFile, findFile, listAppFiles, uploadFile, type RemoteFile } from './drive';
 import { TRIM_VERSION } from './trim';
 import { baseName, uid } from './utils';
@@ -408,6 +408,19 @@ export async function readOnline(id: string): Promise<boolean> {
 
 /** Deletes the temporary copy of a "read online" book; the record, position and notes stay. */
 export async function discardTempRead(id: string): Promise<void> {
+  // somebody else's book (stage 3b): the whole copy goes, record and notes included
+  const visited = useApp.getState().visitorBook;
+  if (visited?.id === id) {
+    const r = useApp.getState().route;
+    if (r.name === 'reader' && r.id === id) return;
+    try {
+      await deleteBook(id);
+    } catch {
+      /* removed at the next app start */
+    }
+    if (useApp.getState().visitorBook?.id === id) useApp.getState().setVisitorBook(null);
+    return;
+  }
   const book = useApp.getState().books.find((b) => b.id === id);
   if (!book?.tempRead || !book.remoteOnly) return;
   // still open in the reader (e.g. a quick re-mount): keep the file
