@@ -14,6 +14,7 @@ export const en = {
   'nav.library': 'Library',
   'nav.continue': 'Continue',
   'nav.settings': 'Settings',
+  'nav.online': "Online",
 
   'theme.system': 'System',
   'theme.auto': 'Same as app',

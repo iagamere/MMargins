@@ -16,6 +16,7 @@ export const ar: Dict = {
   'nav.library': 'المكتبة',
   'nav.continue': 'متابعة',
   'nav.settings': 'الإعدادات',
+  'nav.online': "أونلاين",
 
   'theme.system': 'النظام',
   'theme.auto': 'مثل التطبيق',

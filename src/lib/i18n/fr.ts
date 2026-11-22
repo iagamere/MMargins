@@ -16,6 +16,7 @@ export const fr: Dict = {
   'nav.library': 'Bibliothèque',
   'nav.continue': 'Reprendre',
   'nav.settings': 'Réglages',
+  'nav.online': "En ligne",
 
   'theme.system': 'Système',
   'theme.auto': 'Comme l’appli',

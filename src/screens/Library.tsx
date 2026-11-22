@@ -12,7 +12,6 @@ import { ShelfDialog } from '../components/ShelfDialog';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ShelfSheet } from '../components/ShelfSheet';
 import { pushBackHandler } from '../lib/backStack';
-import { AccountButton } from '../components/AccountButton';
 
 const FILTERS: LibraryFilter[] = ['all', 'reading', 'completed', 'recent'];
 const SORTS: LibrarySort[] = ['opened', 'added', 'title', 'author', 'progress'];
@@ -198,7 +197,6 @@ export function LibraryScreen() {
                   {t('library.add')}
                 </button>
               )}
-              {!shelf && <AccountButton />}
             </div>
           </div>
           {shelf && (
