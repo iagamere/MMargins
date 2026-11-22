@@ -459,7 +459,7 @@ export const en = {
   'onlineBooks.addBtn': "Add books",
   'onlineBooks.empty': "No books yet. Add books from this device to organise and set their privacy.",
   'onlineBooks.addTitle': "Add books from this device",
-  'onlineBooks.addHint': "Only the book’s details are saved for now. The file is not uploaded and nobody else can see the book until file upload is available.",
+  'onlineBooks.addHint': "The book’s details are saved first. Upload the file afterwards; nobody else can see a book until its file is uploaded and you allow it.",
   'onlineBooks.noLocal': "There are no books on this device.",
   'onlineBooks.rights': "I confirm I have the right to share these books (they are mine, in the public domain, or I have permission).",
   'onlineBooks.add': "Add {count}",
@@ -487,6 +487,15 @@ export const en = {
   'onlineBooks.nothingToAdd': "All your online books are already here, or you have none yet.",
   'onlineBooks.put': "Add",
   'online.err.duplicate': "This book is already in your online library.",
+  'onlineBooks.upload': "Upload file",
+  'onlineBooks.uploadAll': "Upload all ({count})",
+  'onlineBooks.uploading': "Uploading… {pct}%",
+  'onlineBooks.published': "File uploaded",
+  'onlineBooks.noLocalFile': "The file is not on this device — upload it from the device that has it",
+  'onlineBooks.tooLarge': "Too large to upload (limit 50 MB)",
+  'onlineBooks.visibilityNote': "Uploading does not share a book: who can see it is decided only by the privacy settings. Your library is private unless you change it.",
+  'online.err.tooLarge': "The file is too large (limit 50 MB).",
+  'online.err.uploadFailed': "The upload failed. Check your connection and try again.",
 } as const;
 
 export type Dict = { [K in keyof typeof en]: string };

@@ -158,10 +158,18 @@ describe('profile calls', () => {
   });
 
   test('delete account clears the local session', async () => {
-    handler = () => ({ status: 204 });
+    handler = (c) => (c.url.includes('/rest/v1/books') ? { body: [{ id: 'b1', format: 'epub' }] } : { status: 204 });
     await online.deleteOnlineAccount();
-    expect(calls[0].url).toContain('/rpc/delete_my_account');
+    // stored files are removed first, then the account
+    expect(calls.some((c) => c.url.includes('/storage/v1/object/books') && c.init.method === 'DELETE')).toBe(true);
+    expect(calls[calls.length - 1].url).toContain('/rpc/delete_my_account');
     expect(online.hasSession()).toBe(false);
+  });
+
+  test('delete account still goes ahead when file removal fails', async () => {
+    handler = (c) => (c.url.includes('/rest/v1/books') ? { status: 500, body: {} } : { status: 204 });
+    await online.deleteOnlineAccount();
+    expect(calls[calls.length - 1].url).toContain('/rpc/delete_my_account');
   });
 });
 
@@ -262,5 +270,51 @@ describe('books', () => {
     await online.listMyShelfLinks();
     expect(calls[0].url).toContain('/rest/v1/books?owner_id=eq.u1');
     expect(calls[1].url).toContain('/rest/v1/shelf_books?owner_id=eq.u1');
+  });
+});
+
+describe('upload', () => {
+  beforeEach(() => seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3000, user_id: 'u1' }));
+  const book = { id: 'b1', format: 'epub' as const, file_size: 4 };
+  const blob = new Blob([new Uint8Array(4)]);
+
+  test('uploads to the owner path, then finalizes', async () => {
+    handler = (c) => (c.url.includes('finalize_book_upload') ? { body: 'ready' } : { body: { Key: 'x' } });
+    await online.publishBookFile(book, blob, undefined);
+    expect(calls[0].url).toContain('/storage/v1/object/books/u1/b1.epub');
+    expect(calls[0].init.headers['Content-Type']).toBe('application/epub+zip');
+    expect(calls[0].init.headers['x-upsert']).toBe('true');
+    expect(calls[1].url).toContain('/rpc/finalize_book_upload');
+  });
+
+  test('a failed verification is an error', async () => {
+    handler = (c) => (c.url.includes('finalize_book_upload') ? { body: 'failed' } : { body: {} });
+    await expect(online.publishBookFile(book, blob, undefined)).rejects.toMatchObject({ code: 'uploadFailed' });
+  });
+
+  test('size mismatch is refused before any request', async () => {
+    handler = () => ({ body: {} });
+    await expect(online.publishBookFile({ ...book, file_size: 5 }, blob, undefined)).rejects.toMatchObject({ code: 'uploadFailed' });
+    expect(calls.length).toBe(0);
+  });
+
+  test('413 maps to tooLarge; a storage 403 is uploadFailed', async () => {
+    handler = () => ({ status: 413, body: { statusCode: '413', message: 'The object exceeded the maximum allowed size' } });
+    await expect(online.uploadObject('books', 'u1/b1.epub', blob, 'application/pdf')).rejects.toMatchObject({ code: 'tooLarge' });
+    handler = () => ({ status: 403, body: { statusCode: '403', message: 'new row violates row-level security policy' } });
+    await expect(online.uploadObject('books', 'u1/b1.epub', blob, 'application/pdf')).rejects.toMatchObject({ code: 'uploadFailed' });
+  });
+
+  test('a cover failure does not block the book', async () => {
+    handler = (c) => (c.url.includes('/covers/') ? { status: 400, body: { message: 'x' } } : c.url.includes('finalize') ? { body: 'ready' } : { body: {} });
+    await online.publishBookFile(book, blob, new Blob([new Uint8Array(2)]));
+  });
+
+  test('hashes map and file removal', async () => {
+    handler = (c) => (c.url.includes('my_book_hashes') ? { body: [{ id: 'b1', file_hash: 'h' }] } : { status: 200, body: [] });
+    expect((await online.myBookHashes()).get('b1')).toBe('h');
+    await online.removeBookFiles([{ id: 'b1', format: 'pdf' }]);
+    expect(JSON.parse(calls[1].init.body)).toEqual({ prefixes: ['u1/b1.pdf'] });
+    expect(calls[1].init.method).toBe('DELETE');
   });
 });

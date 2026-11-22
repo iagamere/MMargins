@@ -27,7 +27,7 @@ export const onlineConfigured = !!URL_BASE && !!ANON_KEY;
 
 export type OnlineErrorCode =
   | 'notConfigured' | 'offline' | 'notSignedIn' | 'sessionExpired' | 'handleTaken' | 'handleInvalid' | 'handleReserved'
-  | 'handleCooldown' | 'alreadyHasProfile' | 'rateLimited' | 'quota' | 'passwordInvalid' | 'notFound' | 'duplicate' | 'unknown';
+  | 'handleCooldown' | 'alreadyHasProfile' | 'rateLimited' | 'quota' | 'passwordInvalid' | 'notFound' | 'duplicate' | 'tooLarge' | 'uploadFailed' | 'unknown';
 
 export class OnlineError extends Error {
   code: OnlineErrorCode;
@@ -86,7 +86,7 @@ export const sessionUserId = () => readSession()?.user_id ?? null;
 /* ---------------------------------------------------------------- error mapping */
 /** Turns a PostgREST / GoTrue error body into one of our codes. Pure: unit-tested. */
 export function mapError(status: number, body: unknown): OnlineError {
-  const b = (body ?? {}) as { code?: string; message?: string; error_description?: string; msg?: string };
+  const b = (body ?? {}) as { code?: string; message?: string; error_description?: string; msg?: string; statusCode?: string | number };
   const msg = String(b.message ?? b.error_description ?? b.msg ?? '');
   const code = String(b.code ?? '');
   if (/handle_reserved/.test(msg)) return new OnlineError('handleReserved', msg);
@@ -95,6 +95,8 @@ export function mapError(status: number, body: unknown): OnlineError {
   if (code === '23505' && /profiles_pkey/.test(msg)) return new OnlineError('alreadyHasProfile', msg);
   if (code === '23514' && /handle/.test(msg)) return new OnlineError('handleInvalid', msg);
   if (code === '23505' && /books_owner_id_file_hash/.test(msg)) return new OnlineError('duplicate', msg);
+  if (status === 413 || String(b.statusCode ?? '') === '413' || /exceeded the maximum allowed size/i.test(msg)) return new OnlineError('tooLarge', msg);
+  if (/upload_missing/.test(msg)) return new OnlineError('uploadFailed', msg);
   if (/password_invalid/.test(msg)) return new OnlineError('passwordInvalid', msg);
   if (/not_found/.test(msg)) return new OnlineError('notFound', msg);
   if (/rate_limited|cooldown/.test(msg) || status === 429) return new OnlineError('rateLimited', msg);
@@ -236,6 +238,13 @@ export async function changeHandle(handle: string): Promise<OnlineProfile> {
 
 /** Deletes the online account and everything stored under it. Local books and the Drive copy are untouched. */
 export async function deleteOnlineAccount(): Promise<void> {
+  // stored files are not removed by the database cascade: delete them first (best effort, the account deletion still goes ahead)
+  try {
+    const mine = await listMyBooks();
+    await removeBookFiles(mine);
+  } catch {
+    /* ignore */
+  }
   await rpc('delete_my_account');
   writeSession(null);
 }
@@ -375,13 +384,14 @@ export async function createBookRecord(b: { title: string; author?: string; lang
   );
 }
 
-export type BookPatch = Partial<Pick<OnlineBook, 'title' | 'author' | 'description' | 'access' | 'read_allowed' | 'download_allowed'>>;
+export type BookPatch = Partial<Pick<OnlineBook, 'title' | 'author' | 'description' | 'access' | 'read_allowed' | 'download_allowed'>> & { has_cover?: boolean };
 export async function updateBook(id: string, patch: BookPatch): Promise<OnlineBook> {
   return first<OnlineBook>(
     await authed(`/rest/v1/books?id=eq.${encodeURIComponent(id)}&select=${BOOK_COLS}`, { method: 'PATCH', headers: { Prefer: 'return=representation' }, json: patch }),
   );
 }
-export async function deleteBook(id: string): Promise<void> {
+export async function deleteBook(id: string, format?: 'epub' | 'pdf'): Promise<void> {
+  if (format) await removeBookFiles([{ id, format }]).catch(() => undefined);
   await authed(`/rest/v1/books?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
@@ -404,4 +414,85 @@ export async function removeBookFromShelf(shelfId: string, bookId: string): Prom
 }
 export async function setShelfBookPosition(shelfId: string, bookId: string, position: number): Promise<void> {
   await authed(`/rest/v1/shelf_books?shelf_id=eq.${encodeURIComponent(shelfId)}&book_id=eq.${encodeURIComponent(bookId)}`, { method: 'PATCH', json: { position } });
+}
+
+/* ------------------------------------------------------------ file upload (stage 3a) */
+/** Supabase free-plan ceiling per file; the `books` bucket enforces the same limit */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+export async function getAccessToken(): Promise<string> {
+  return token();
+}
+const objectPath = (id: string, ext: string) => {
+  const uid = sessionUserId();
+  if (!uid) throw new OnlineError('notSignedIn');
+  return `${uid}/${id}.${ext}`;
+};
+
+function xhrPut(url: string, headers: Record<string, string>, blob: Blob, onProgress: (f: number) => void): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open('POST', url);
+    for (const [k, v] of Object.entries(headers)) x.setRequestHeader(k, v);
+    x.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    x.onload = () => resolve({ status: x.status, text: x.responseText });
+    x.onerror = () => reject(new OnlineError('offline'));
+    x.send(blob);
+  });
+}
+
+/** uploads one object to a private bucket (the storage policy only accepts <uid>/<book id>.<ext> of a book the user owns) */
+export async function uploadObject(bucket: 'books' | 'covers', path: string, blob: Blob, contentType: string, onProgress?: (fraction: number) => void): Promise<void> {
+  if (!onlineConfigured) throw new OnlineError('notConfigured');
+  const attempt = async (tok: string) => {
+    const headers = { apikey: ANON_KEY, Authorization: `Bearer ${tok}`, 'Content-Type': contentType, 'x-upsert': 'true', 'cache-control': 'max-age=3600' };
+    const url = `${URL_BASE}/storage/v1/object/${bucket}/${path}`;
+    if (onProgress && typeof XMLHttpRequest !== 'undefined') return xhrPut(url, headers, blob, onProgress);
+    try {
+      const r = await fetch(url, { method: 'POST', headers, body: blob });
+      return { status: r.status, text: await r.text() };
+    } catch {
+      throw new OnlineError('offline');
+    }
+  };
+  let r = await attempt(await token());
+  if (r.status === 401 && readSession()) r = await attempt((await refresh(readSession()!)).access_token);
+  if (r.status < 200 || r.status >= 300) {
+    let body: unknown = null;
+    try { body = JSON.parse(r.text); } catch { /* not JSON */ }
+    const e = mapError(r.status, body);
+    throw e.code === 'unknown' ? new OnlineError('uploadFailed', e.message) : e;
+  }
+}
+
+export async function removeBookFiles(books: { id: string; format: 'epub' | 'pdf' }[]): Promise<void> {
+  if (books.length === 0) return;
+  await authed('/storage/v1/object/books', { method: 'DELETE', json: { prefixes: books.map((b) => objectPath(b.id, b.format)) } });
+  await authed('/storage/v1/object/covers', { method: 'DELETE', json: { prefixes: books.map((b) => objectPath(b.id, 'jpg')) } }).catch(() => undefined);
+}
+
+/** online book id -> sha-256 of its file, so any device can find the matching local file */
+export async function myBookHashes(): Promise<Map<string, string>> {
+  const rows = (await rpc('my_book_hashes')) as { id: string; file_hash: string }[];
+  return new Map(rows.map((r) => [r.id, r.file_hash]));
+}
+
+export async function finalizeBookUpload(id: string): Promise<'pending' | 'ready' | 'failed'> {
+  return (await rpc('finalize_book_upload', { p_book: id })) as 'pending' | 'ready' | 'failed';
+}
+
+/** uploads the file (and cover), then asks the database to verify it: resolves only when the book is ready */
+export async function publishBookFile(book: Pick<OnlineBook, 'id' | 'format' | 'file_size'>, file: Blob, cover: Blob | undefined, onProgress?: (fraction: number) => void): Promise<void> {
+  if (file.size > MAX_UPLOAD_BYTES) throw new OnlineError('tooLarge');
+  if (file.size !== book.file_size) throw new OnlineError('uploadFailed', 'size_mismatch');
+  await uploadObject('books', objectPath(book.id, book.format), file, book.format === 'pdf' ? 'application/pdf' : 'application/epub+zip', onProgress);
+  if (cover) {
+    try {
+      await uploadObject('covers', objectPath(book.id, 'jpg'), cover, 'image/jpeg');
+      await updateBook(book.id, { has_cover: true });
+    } catch {
+      /* a missing cover never blocks publishing the book */
+    }
+  }
+  if ((await finalizeBookUpload(book.id)) !== 'ready') throw new OnlineError('uploadFailed', 'verification_failed');
 }

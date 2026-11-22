@@ -5,7 +5,7 @@ import { useT } from '../lib/i18n';
 import { getFile } from '../lib/db';
 import { effectiveBookMode, effectiveShelfMode, isLoosening, type AccessMode, type ShelfAccess } from '../lib/access';
 import {
-  OnlineError, addBookToShelf, createBookRecord, deleteBook, hasAccessPassword, removeBookFromShelf, setAccessPassword, setShelfBookPosition, updateBook,
+  MAX_UPLOAD_BYTES, OnlineError, addBookToShelf, createBookRecord, deleteBook, hasAccessPassword, removeBookFromShelf, setAccessPassword, setShelfBookPosition, updateBook,
   type OnlineBook, type OnlineLibrary, type OnlineShelf, type ShelfLink,
 } from '../lib/online';
 import type { BookRecord } from '../lib/types';
@@ -76,8 +76,8 @@ export function AddBooksSheet({ onClose, onAdded }: { onClose: () => void; onAdd
             {local.map((b) => (
               <li key={b.id} className="olib-row">
                 <label className="olib-check">
-                  <input type="checkbox" checked={picked.has(b.id)} onChange={() => toggle(b.id)} />
-                  <span className="olib-main"><span className="label" dir="auto">{b.title}</span>{b.author && <span className="hint" dir="auto">{b.author}</span>}</span>
+                  <input type="checkbox" checked={picked.has(b.id)} disabled={b.size > MAX_UPLOAD_BYTES} onChange={() => toggle(b.id)} />
+                  <span className="olib-main"><span className="label" dir="auto">{b.title}</span>{b.author && <span className="hint" dir="auto">{b.author}</span>}{b.size > MAX_UPLOAD_BYTES && <span className="hint">{t('onlineBooks.tooLarge')}</span>}</span>
                 </label>
               </li>
             ))}
@@ -182,7 +182,7 @@ export function BookSheet({ book, lib, shelves, links, onClose, onSaved, onDelet
         <ConfirmDialog danger title={t('onlineBooks.removeTitle')} body={t('onlineBooks.removeBody')} confirmLabel={t('onlineBooks.remove')} onCancel={() => setConfirmDelete(false)}
           onConfirm={async () => {
             setConfirmDelete(false);
-            try { await deleteBook(book.id); onDeleted(book.id); toast('onlineBooks.removed', 'info'); onClose(); } catch (e) { setErr(codeOf(e)); }
+            try { await deleteBook(book.id, book.format); onDeleted(book.id); toast('onlineBooks.removed', 'info'); onClose(); } catch (e) { setErr(codeOf(e)); }
           }} />
       )}
     </Sheet>

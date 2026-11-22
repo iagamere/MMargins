@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, BookOpen, ChevronDown, ChevronUp, Pencil, Plus, Settings2, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpen, ChevronDown, ChevronUp, Pencil, Plus, Settings2, Trash2, Upload } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useOnline } from '../store/useOnline';
 import { useT } from '../lib/i18n';
+import { getFile } from '../lib/db';
 import { effectiveBookMode, effectiveShelfMode, isLoosening, type AccessMode, type ShelfAccess } from '../lib/access';
 import {
-  createShelf, deleteShelf, fetchMyLibrary, hasAccessPassword, listMyBooks, listMyShelfLinks, listMyShelves, onlineConfigured,
+  createShelf, deleteShelf, fetchMyLibrary, hasAccessPassword, listMyBooks, listMyShelfLinks, listMyShelves, myBookHashes, onlineConfigured, publishBookFile,
   reorderShelves, setAccessPassword, updateLibrary, updateShelf,
   type OnlineBook, type OnlineLibrary, type OnlineShelf, type ShelfLink,
 } from '../lib/online';
@@ -177,6 +178,9 @@ export function OnlineLibraryScreen() {
   const [shelves, setShelves] = useState<OnlineShelf[]>([]);
   const [books, setBooks] = useState<OnlineBook[]>([]);
   const [links, setLinks] = useState<ShelfLink[]>([]);
+  const [hashes, setHashes] = useState<Map<string, string>>(new Map());
+  const [up, setUp] = useState<Record<string, { pct: number } | { err: string }>>({});
+  const localBooks = useApp((s) => s.books);
   const [addingBooks, setAddingBooks] = useState(false);
   const [editBook, setEditBook] = useState<OnlineBook | null>(null);
   const [shelfBooks, setShelfBooks] = useState<OnlineShelf | null>(null);
@@ -197,6 +201,7 @@ export function OnlineLibraryScreen() {
       setShelves(s);
       setBooks(b);
       setLinks(k);
+      myBookHashes().then(setHashes, () => undefined);
       setLoad('ready');
     } catch (e) {
       setFail(codeOf(e));
@@ -210,6 +215,27 @@ export function OnlineLibraryScreen() {
   useEffect(() => {
     if (status === 'ready' && profile) void reload();
   }, [status, profile, reload]);
+
+  const localFor = (b: OnlineBook) => {
+    const h = hashes.get(b.id);
+    return h ? localBooks.find((x) => x.hash === h && !x.remoteOnly && !x.tempRead) : undefined;
+  };
+  const uploadOne = async (b: OnlineBook) => {
+    const local = localFor(b);
+    if (!local) return;
+    setUp((u) => ({ ...u, [b.id]: { pct: 0 } }));
+    try {
+      const file = await getFile(local.id);
+      if (!file) throw new Error('missing');
+      await publishBookFile(b, file, local.cover, (f) => setUp((u) => ({ ...u, [b.id]: { pct: Math.round(f * 100) } })));
+      setBooks((all) => all.map((x) => (x.id === b.id ? { ...x, file_status: 'ready' } : x)));
+      setUp((u) => { const n = { ...u }; delete n[b.id]; return n; });
+    } catch (e) {
+      setUp((u) => ({ ...u, [b.id]: { err: codeOf(e) === 'unknown' ? 'uploadFailed' : codeOf(e) } }));
+    }
+  };
+  const waiting = books.filter((b) => b.file_status !== 'ready' && localFor(b) && !(up[b.id] && 'pct' in up[b.id]));
+  const uploadAll = async () => { for (const b of waiting) await uploadOne(b); };
 
   const move = async (i: number, dir: -1 | 1) => {
     const j = i + dir;
@@ -296,6 +322,8 @@ export function OnlineLibraryScreen() {
           <h2>{t('onlineBooks.title')}</h2>
           <button className="btn btn-sm btn-primary" onClick={() => setAddingBooks(true)}><Plus size={16} aria-hidden="true" />{t('onlineBooks.addBtn')}</button>
         </div>
+        {waiting.length > 1 && <div className="acc-actions" style={{ marginBottom: 10 }}><button className="btn btn-sm" onClick={() => void uploadAll()}><Upload size={16} aria-hidden="true" />{t('onlineBooks.uploadAll', { count: waiting.length })}</button></div>}
+        <p className="hint">{t('onlineBooks.visibilityNote')}</p>
         {books.length === 0 ? (
           <p className="hint">{t('onlineBooks.empty')}</p>
         ) : (
@@ -306,9 +334,19 @@ export function OnlineLibraryScreen() {
                   <div className="label" dir="auto">{b.title}</div>
                   {b.author && <div className="hint olib-desc" dir="auto">{b.author}</div>}
                   <AccessBadge mode={effectiveBookMode(b.access, shelfModesOf(b.id, links, shelves, lib), lib.default_access)} inherited={b.access === 'inherit'} />
-                  {b.file_status !== 'ready' && <span className="hint">{t('onlineBooks.notUploaded')}</span>}
+                  {b.file_status === 'ready' ? <span className="hint">{t('onlineBooks.published')}</span> : (() => {
+                    const u = up[b.id];
+                    if (u && 'pct' in u) return <span className="hint" role="status">{t('onlineBooks.uploading', { pct: u.pct })}</span>;
+                    if (u && 'err' in u) return <span className="acc-error" role="alert">{t(`online.err.${u.err}`)}</span>;
+                    return <span className="hint">{localFor(b) ? t('onlineBooks.notUploaded') : t('onlineBooks.noLocalFile')}</span>;
+                  })()}
                 </div>
-                <div className="olib-tools"><button className="icon-btn" onClick={() => setEditBook(b)} aria-label={t('onlineBooks.edit')}><Pencil size={18} /></button></div>
+                <div className="olib-tools">
+                  {b.file_status !== 'ready' && localFor(b) && !(up[b.id] && 'pct' in up[b.id]) && (
+                    <button className="icon-btn" onClick={() => void uploadOne(b)} aria-label={t('onlineBooks.upload')}><Upload size={18} /></button>
+                  )}
+                  <button className="icon-btn" onClick={() => setEditBook(b)} aria-label={t('onlineBooks.edit')}><Pencil size={18} /></button>
+                </div>
               </li>
             ))}
           </ul>
