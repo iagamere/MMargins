@@ -1,0 +1,235 @@
+export type BookFormat = 'epub' | 'pdf';
+export type Lang = 'ar' | 'fr' | 'en';
+export type ThemeName = 'light' | 'dark' | 'sepia';
+export type AppTheme = 'system' | ThemeName;
+export type AccentName = 'mono' | 'olive' | 'clay' | 'ochre' | 'sea' | 'slate' | 'plum' | 'rose' | 'cocoa' | 'custom';
+export type ReaderTheme = 'auto' | ThemeName;
+export type ReadingMode = 'scroll' | 'paged';
+export type ReadFont = 'auto' | 'original' | 'literata' | 'sourceSerif' | 'naskh' | 'amiri' | 'plexArabic' | 'cairo' | 'inter';
+export type TextDir = 'auto' | 'rtl' | 'ltr';
+export type TextWeight = 'regular' | 'bold';
+export type TextAlign = 'original' | 'start' | 'justify';
+export type HighlightColor = 'sage' | 'gold' | 'rose' | 'sky';
+/** one look for the whole library: cover tiles · cards (picture on the left, details inside) · names only */
+export type LibraryView = 'covers' | 'cards' | 'names';
+export type LibraryFilter = 'all' | 'reading' | 'completed' | 'recent';
+export type LibrarySort = 'opened' | 'added' | 'title' | 'author' | 'progress';
+
+export interface BookRecord {
+  id: string;
+  hash: string;
+  format: BookFormat;
+  title: string;
+  author?: string;
+  fileName: string;
+  size: number;
+  addedAt: number;
+  lastOpenedAt?: number;
+  /** 0..1 */
+  percentage: number;
+  /** EPUB: CFI string. PDF: "p:<page>:<offset 0..1>" */
+  location?: string;
+  finished: boolean;
+  cover?: Blob;
+  /** white page margins already cut off the cover */
+  coverTrimmed?: boolean;
+  /** version of the trimming algorithm applied to the cover (see trim.ts) */
+  coverTrimV?: number;
+  /** colour of the placeholder cover (books without a cover picture) */
+  coverColor?: string;
+  language?: string;
+  rtl?: boolean;
+  pages?: number;
+  /** PDF: this book is read in text-reflow mode */
+  pdfReflow?: boolean;
+  /** the shelf this book sits on (none = loose in the library) */
+  shelfId?: string;
+  /** Google Drive file id of the book (set once it is in the user's Drive) */
+  cloudId?: string;
+  coverCloudId?: string;
+  /** the book is in Drive only: no file on this device yet (tap the corner icon to download) */
+  remoteOnly?: boolean;
+  /** the file on this device is a temporary copy for "read online": deleted when the reader closes */
+  tempRead?: boolean;
+  /** ids of bookmarks/notes deleted here, with the time: so a deletion also reaches the other devices */
+  annDeleted?: Record<string, number>;
+  /** version stamp of the last reading state (progress, notes) exchanged with Drive */
+  stateU?: string;
+}
+
+export type ShelfRatio = '2:3' | '1:1';
+
+export interface ShelfRecord {
+  id: string;
+  name: string;
+  createdAt: number;
+  /** '#rrggbb' accent of this shelf (unset = default look) */
+  color?: string;
+  /** shelf picture, already cropped to `ratio` */
+  image?: Blob;
+  ratio?: ShelfRatio;
+  /** the colour is taken from the picture ("dynamic colour") */
+  dynamic?: boolean;
+}
+
+/** What the shelf dialog edits. */
+export type ShelfStyle = Pick<ShelfRecord, 'color' | 'image' | 'ratio' | 'dynamic'>;
+
+export interface AnnotationRecord {
+  id: string;
+  bookId: string;
+  type: 'bookmark' | 'highlight';
+  /** EPUB: CFI of the position. PDF: "p:<page>:0" */
+  location: string;
+  /** EPUB highlights only */
+  cfiRange?: string;
+  text?: string;
+  note?: string;
+  /** bookmarks: user-given name and marker colour ('#rrggbb', unset = default) */
+  title?: string;
+  markColor?: string;
+  color?: HighlightColor;
+  chapter?: string;
+  page?: number;
+  percentage: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface Settings {
+  lang: Lang;
+  theme: AppTheme;
+  /** interface accent colour */
+  accent: AccentName;
+  /** the colour behind accent 'custom' (#rrggbb) */
+  accentCustom: string;
+  /** colours the user invented and kept, offered wherever a colour is chosen */
+  savedColors: string[];
+  readerTheme: ReaderTheme;
+  readingMode: ReadingMode;
+  font: ReadFont;
+  /** px */
+  fontSize: number;
+  lineHeight: number;
+  /** em */
+  paragraphSpacing: number;
+  /** px, side margins inside the reading area */
+  margin: number;
+  /** px, maximum width of the reading column */
+  maxWidth: number;
+  textAlign: TextAlign;
+  /** PDF text reflow only: force the paragraph direction */
+  textDir: TextDir;
+  /** PDF text reflow only */
+  textWeight: TextWeight;
+  /** bookmark marker colour: 'auto' follows the theme, otherwise a #rrggbb value */
+  markColor: string;
+  /** progress-bar bookmarks attract the slider while dragging */
+  magnet: boolean;
+  pdfAdaptTheme: boolean;
+  /** PDF: show extracted text re-flowed to the screen instead of the original pages */
+  pdfReflow: boolean;
+  libraryView: LibraryView;
+  librarySort: LibrarySort;
+  /** flips the natural direction of librarySort (newest/A→Z/most read first) */
+  libraryReverse: boolean;
+  /** signed in: every imported book is also copied to Google Drive */
+  cloudAutoUpload: boolean;
+}
+
+export type Route =
+  | { name: 'library' }
+  | { name: 'continue' }
+  | { name: 'settings' }
+  | { name: 'account' }
+  | { name: 'details'; id: string }
+  | { name: 'reader'; id: string };
+
+export interface TocItem {
+  id: string;
+  label: string;
+  /** EPUB */
+  href?: string;
+  /** PDF outline destination (unresolved) */
+  dest?: unknown;
+  children: TocItem[];
+}
+
+export interface ReaderPosition {
+  location: string;
+  percentage: number;
+  chapter?: string;
+  /** EPUB: range of the visible content */
+  start?: string;
+  end?: string;
+  /** PDF */
+  page?: number;
+  total?: number;
+  atEnd?: boolean;
+  excerpt?: string;
+}
+
+export interface SearchHit {
+  id: string;
+  location: string;
+  label?: string;
+  excerpt: string;
+}
+
+export interface SearchOutcome {
+  /** false when a PDF has no text layer at all */
+  hasText: boolean;
+}
+
+/** A bookmark/note being opened from the notes list: the reader centres it and makes it glow for a moment. */
+export interface PassageFocus {
+  text?: string;
+  cfiRange?: string;
+  color: string;
+  /** search hits: the exact words to mark inside `text` */
+  inner?: string;
+  /** ms the soft highlight stays after the glow (search hits) */
+  hold?: number;
+}
+
+export interface ReaderApi {
+  next(): void;
+  prev(): void;
+  nextSection(): void;
+  prevSection(): void;
+  goToLocation(loc: string, focus?: PassageFocus): void;
+  goToToc(item: TocItem): void;
+  goToPercent(p: number): void;
+  search(query: string, onHit: (h: SearchHit) => void, cancel: { cancelled: boolean }): Promise<SearchOutcome>;
+  goToHit(hit: SearchHit): void;
+  /** PDF only */
+  goToPage?(page: number): void;
+  zoomBy?(factor: number): void;
+  setFit?(mode: 'width' | 'page'): void;
+}
+
+export interface ReaderReadyInfo {
+  toc: TocItem[];
+  api: ReaderApi;
+  pdfDoc?: unknown;
+  numPages?: number;
+}
+
+export type ErrorCode =
+  | 'unsupported'
+  | 'invalid'
+  | 'corruptEpub'
+  | 'corruptPdf'
+  | 'passwordPdf'
+  | 'quota'
+  | 'importFailed'
+  | 'restoreFailed'
+  | 'storageUnavailable';
+
+export class AppError extends Error {
+  code: ErrorCode;
+  constructor(code: ErrorCode, message?: string) {
+    super(message ?? code);
+    this.code = code;
+  }
+}

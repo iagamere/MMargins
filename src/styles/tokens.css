@@ -1,0 +1,67 @@
+:root {
+  --font-ui: 'Inter', 'IBM Plex Sans Arabic', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-read: 'Literata', 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur: 180ms;
+  --nav-h: 60px;
+  --safe-t: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --safe-b: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  --safe-l: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
+  --safe-r: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
+}
+:root[lang='ar'] {
+  --font-ui: 'IBM Plex Sans Arabic', 'Inter', system-ui, sans-serif;
+  --font-read: 'Noto Naskh Arabic', 'Literata', serif;
+}
+
+:root,
+[data-theme='light'] {
+  --bg: #f5f7f9;
+  --bg2: #ebeef1;
+  --surface: #ffffff;
+  --fg: #16181a;
+  --fg2: #5f656b;
+  --accent: #26292c;
+  --accent-ink: #16181a; /* accessible accent for text on light */
+  --accent2: #b28d65;
+  --mark: #b0503f;
+  --border: #dfe3e7;
+  --on-accent: #ffffff;
+  --overlay: rgba(22, 24, 26, 0.38);
+  --danger: #a4493d;
+  --shadow: 0 1px 2px rgba(22, 24, 26, 0.06), 0 8px 24px rgba(22, 24, 26, 0.08);
+}
+[data-theme='dark'] {
+  --bg: #0e0f10;
+  --bg2: #151617;
+  --surface: #1c1d1f;
+  --fg: #ecedee;
+  --fg2: #a0a3a6;
+  --accent: #dfe3e7;
+  --accent-ink: #dfe3e7;
+  --accent2: #c0a17d;
+  --mark: #d98b7f;
+  --border: #2a2c2e;
+  --on-accent: #0e0f10;
+  --overlay: rgba(0, 0, 0, 0.55);
+  --danger: #d98b7f;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+[data-theme='sepia'] {
+  --bg: #f0e5d0;
+  --bg2: #e7dbc2;
+  --surface: #f7efe0;
+  --fg: #43392f;
+  --fg2: #776858;
+  --accent: #8a7a55;
+  --accent-ink: #6b5a3e;
+  --accent2: #a8794d;
+  --mark: #a4493d;
+  --border: #dccfb4;
+  --on-accent: #fffaf0;
+  --overlay: rgba(67, 57, 47, 0.4);
+  --danger: #9c4437;
+  --shadow: 0 1px 2px rgba(67, 57, 47, 0.08), 0 8px 24px rgba(67, 57, 47, 0.1);
+}
