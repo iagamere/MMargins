@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Globe, RefreshCw, Trash2 } from 'lucide-react';
+import { Globe, Library, RefreshCw, Trash2 } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useOnline } from '../store/useOnline';
 import { useT } from '../lib/i18n';
@@ -247,6 +247,9 @@ export function OnlineProfileCard() {
           <p className="hint">{t('online.publicNote')}</p>
           {errorLine(fail)}
           <div className="acc-actions">
+            <button className="btn btn-sm btn-primary" onClick={() => useApp.getState().navigate({ name: 'onlineLibrary' })}>
+              <Library size={16} aria-hidden="true" />{t('onlineLib.open')}
+            </button>
             <button className="btn btn-sm" onClick={startEdit}>{t('online.edit')}</button>
             <button className="btn btn-sm btn-ghost btn-danger" onClick={() => setConfirmDelete(true)}>
               <Trash2 size={16} aria-hidden="true" />{t('online.delete')}

@@ -53,6 +53,14 @@ describe('mapError', () => {
   });
 });
 
+describe('base url', () => {
+  test('tolerates trailing slash and the /rest/v1 suffix', () => {
+    expect(online.cleanBaseUrl('https://x.supabase.co/rest/v1/')).toBe('https://x.supabase.co');
+    expect(online.cleanBaseUrl(' https://x.supabase.co/ ')).toBe('https://x.supabase.co');
+    expect(online.cleanBaseUrl('https://x.supabase.co')).toBe('https://x.supabase.co');
+  });
+});
+
 describe('sessions', () => {
   test('is configured from the environment', () => {
     expect(online.onlineConfigured).toBe(true);
@@ -74,6 +82,13 @@ describe('sessions', () => {
     await online.fetchMyProfile();
     for (const c of calls) expect(JSON.stringify(c.init.headers)).not.toMatch(/service/i);
     expect(calls[1].init.headers.Authorization).toBe('Bearer AT');
+  });
+
+  test('a publishable (non-JWT) key is sent as apikey only, never as bearer', async () => {
+    handler = () => ({ body: session() });
+    await online.signInWithGoogleIdToken('t');
+    expect(calls[0].init.headers.apikey).toBe('anon-key');
+    expect(calls[0].init.headers.Authorization).toBeUndefined();
   });
 
   test('an empty ID token is refused without a request', async () => {
@@ -147,5 +162,105 @@ describe('profile calls', () => {
     await online.deleteOnlineAccount();
     expect(calls[0].url).toContain('/rpc/delete_my_account');
     expect(online.hasSession()).toBe(false);
+  });
+});
+
+describe('library & shelves', () => {
+  beforeEach(() => seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3000, user_id: 'u1' }));
+
+  test('reads only my library and shelves, ordered', async () => {
+    handler = (c) => ({ body: c.url.includes('/libraries') ? [{ id: 'L', title: '', description: '', default_access: 'private' }] : [] });
+    const lib = await online.fetchMyLibrary();
+    expect(lib.default_access).toBe('private');
+    await online.listMyShelves();
+    expect(calls[0].url).toContain('/rest/v1/libraries?owner_id=eq.u1');
+    expect(calls[1].url).toContain('/rest/v1/shelves?owner_id=eq.u1');
+    expect(calls[1].url).toContain('order=position.asc');
+  });
+
+  test('a missing library is notFound', async () => {
+    handler = () => ({ body: [] });
+    await expect(online.fetchMyLibrary()).rejects.toMatchObject({ code: 'notFound' });
+  });
+
+  test('createShelf sends owner, library, trimmed name', async () => {
+    handler = () => ({ body: [{ id: 's1', name: 'Novels', description: '', position: 3, access: 'inherit' }] });
+    const s = await online.createShelf('L', '  Novels ', ' ', 3);
+    expect(calls[0].init.method).toBe('POST');
+    expect(JSON.parse(calls[0].init.body)).toEqual({ library_id: 'L', owner_id: 'u1', name: 'Novels', description: '', position: 3 });
+    expect(s.access).toBe('inherit');
+  });
+
+  test('updateShelf patches only the given fields', async () => {
+    handler = () => ({ body: [{ id: 's1', name: 'X', description: '', position: 0, access: 'private' }] });
+    await online.updateShelf('s1', { access: 'private' });
+    expect(calls[0].init.method).toBe('PATCH');
+    expect(calls[0].url).toContain('/rest/v1/shelves?id=eq.s1');
+    expect(JSON.parse(calls[0].init.body)).toEqual({ access: 'private' });
+  });
+
+  test('deleteShelf and reorder', async () => {
+    handler = () => ({ status: 204 });
+    await online.deleteShelf('s1');
+    expect(calls[0].init.method).toBe('DELETE');
+    await online.reorderShelves(['b', 'a']);
+    expect(calls[1].url).toContain('/rpc/reorder_shelves');
+    expect(JSON.parse(calls[1].init.body)).toEqual({ p_ids: ['b', 'a'] });
+  });
+
+  test('password calls use the RPCs and map password_invalid', async () => {
+    handler = (c) => (c.url.includes('set_access_password') ? { status: 400, body: { code: 'P0001', message: 'password_invalid' } } : { body: true });
+    await expect(online.setAccessPassword('shelf', 's1', 'short')).rejects.toMatchObject({ code: 'passwordInvalid' });
+    expect(await online.hasAccessPassword('shelf', 's1')).toBe(true);
+    expect(JSON.parse(calls[1].init.body)).toEqual({ p_type: 'shelf', p_id: 's1' });
+  });
+});
+
+describe('books', () => {
+  beforeEach(() => seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3000, user_id: 'u1' }));
+  const H = 'a'.repeat(64);
+
+  test('createBookRecord sends owner, hash, rights time and no file status', async () => {
+    handler = () => ({ body: [{ id: 'b1', title: 'T', author: '', description: '', language: null, format: 'epub', file_size: 5, file_status: 'pending', access: 'inherit', read_allowed: false, download_allowed: false }] });
+    const b = await online.createBookRecord({ title: '  T ', format: 'epub', hash: H, size: 5 });
+    const sent = JSON.parse(calls[0].init.body);
+    expect(sent.owner_id).toBe('u1');
+    expect(sent.file_hash).toBe(H);
+    expect(sent.title).toBe('T');
+    expect(typeof sent.rights_confirmed_at).toBe('string');
+    expect('file_status' in sent).toBe(false);
+    expect(b.file_status).toBe('pending');
+  });
+
+  test('a duplicate file is mapped to duplicate', async () => {
+    handler = () => ({ status: 409, body: { code: '23505', message: 'duplicate key value violates unique constraint "books_owner_id_file_hash_key"' } });
+    await expect(online.createBookRecord({ title: 'T', format: 'pdf', hash: H, size: 5 })).rejects.toMatchObject({ code: 'duplicate' });
+  });
+
+  test('updateBook patches only the sent fields', async () => {
+    handler = () => ({ body: [{ id: 'b1', title: 'T', author: '', description: '', language: null, format: 'pdf', file_size: 5, file_status: 'pending', access: 'friends', read_allowed: true, download_allowed: false }] });
+    await online.updateBook('b1', { access: 'friends', read_allowed: true });
+    expect(calls[0].init.method).toBe('PATCH');
+    expect(JSON.parse(calls[0].init.body)).toEqual({ access: 'friends', read_allowed: true });
+  });
+
+  test('shelf membership calls', async () => {
+    handler = () => ({ body: [{ shelf_id: 's', book_id: 'b', position: 2 }] });
+    await online.addBookToShelf('s', 'b', 2);
+    expect(JSON.parse(calls[0].init.body)).toEqual({ shelf_id: 's', book_id: 'b', owner_id: 'u1', position: 2 });
+    handler = () => ({ status: 204 });
+    await online.removeBookFromShelf('s', 'b');
+    expect(calls[1].init.method).toBe('DELETE');
+    expect(calls[1].url).toContain('shelf_id=eq.s&book_id=eq.b');
+    await online.setShelfBookPosition('s', 'b', 0);
+    expect(calls[2].init.method).toBe('PATCH');
+  });
+
+  test('lists only my books and links', async () => {
+    handler = () => ({ body: [] });
+    await online.listMyBooks();
+    await online.listMyShelfLinks();
+    expect(calls[0].url).toContain('/rest/v1/books?owner_id=eq.u1');
+    expect(calls[1].url).toContain('/rest/v1/shelf_books?owner_id=eq.u1');
   });
 });

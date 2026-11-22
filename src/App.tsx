@@ -15,6 +15,7 @@ import { ContinueScreen } from './screens/Continue';
 import { DetailsScreen } from './screens/Details';
 import { SettingsScreen } from './screens/Settings';
 import { AccountScreen } from './screens/Account';
+import { OnlineLibraryScreen } from './screens/OnlineLibrary';
 import { ReaderScreen } from './reader/ReaderScreen';
 import { useOnline } from './store/useOnline';
 
@@ -102,6 +103,7 @@ export function App() {
         {route.name === 'continue' && <ContinueScreen />}
         {route.name === 'settings' && <SettingsScreen />}
         {route.name === 'account' && <AccountScreen />}
+        {route.name === 'onlineLibrary' && <OnlineLibraryScreen />}
         {route.name === 'details' && <DetailsScreen id={route.id} />}
         <BottomNav />
       </div>

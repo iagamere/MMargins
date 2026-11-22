@@ -396,3 +396,28 @@ textarea.textarea:focus-visible { outline: none; border-color: var(--accent); }
 .online-status { min-height: 18px; margin: 6px 2px 0; font-size: 13px; color: var(--fg2); }
 .online-status.ok { color: var(--accent-ink); }
 .online-status.bad { color: var(--danger); }
+
+/* ---- online library (stage 2a) ---- */
+.olib-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 24px 0 10px; }
+.olib-head h2 { margin: 0; font-size: 18px; }
+.olib-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.olib-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.olib-main { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.olib-desc { overflow-wrap: anywhere; }
+.olib-tools { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.olib-tools .icon-btn:disabled { opacity: 0.3; }
+.olib-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg2); }
+.olib-badge.public { color: var(--accent-ink); }
+.olib-inh { opacity: 0.8; }
+.olib-picker { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.olib-opt { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+.olib-opt.on { border-color: var(--accent); background: var(--bg2); }
+.olib-opt input { margin-top: 3px; accent-color: var(--accent); }
+.olib-opt:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.olib-opt-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.olib-opt-title { font-weight: 600; font-size: 14px; }
+.olib-pw { display: flex; flex-direction: column; gap: 8px; }
+.olib-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; min-width: 0; }
+.olib-check input { margin-top: 3px; accent-color: var(--accent); flex: none; }
+.olib-note { padding: 10px 12px; border-radius: var(--radius); background: var(--bg2); }
+.olib-count { font-size: 12px; margin-inline-start: 2px; }

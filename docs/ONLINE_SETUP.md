@@ -5,7 +5,8 @@
 | Stage | Content | State |
 |---|---|---|
 | 1 | Database schema, privacy rules (RLS), tests, Google sign-in → online account, public profile, account deletion | **done in code — needs your Supabase project (below)** |
-| 2 | My online library UI: shelves, reorder, privacy settings per library / shelf / book | not started |
+| 2a | My online library screen: library settings, shelves (create / edit / delete / reorder), privacy per library and shelf (public / password / friends / private / same as library), password set / change / remove / revoke | **done in code — needs your test** |
+| 2b | Add books from the device (metadata record + rights confirmation), books inside shelves (add / remove / reorder), per-book privacy, read / download permissions, per-book password | **done in code — needs your test** |
 | 3 | Publish a book (file upload to private storage, signed URLs, read / download, import to local library), discovery + search | not started |
 | 4 | Friends, blocks and subscriptions UI | not started (database + RPCs already exist and are tested) |
 | 5 | Notifications (in-app inbox, preferences; push design) and reports / takedown | not started |
@@ -97,8 +98,12 @@ npm run typecheck && npm run build
 
 ## 6. What is NOT done / known limits (honest list)
 
-* Stages 2–5 above: no library/shelf UI yet, no upload, no discovery, no friends UI, no notifications, no reports/takedown. The database already contains the tables and RPCs for friends, blocks, subscriptions and password access, but no screen uses them yet.
+* Stages 3–5 above: no file upload yet (books added in 2b are metadata records with `file_status = pending`, visible only to you), no upload, no discovery, no friends UI, no notifications, no reports/takedown. The database already contains the tables and RPCs for friends, blocks, subscriptions and password access, but no screen uses them yet.
 * Tests that need a real Supabase (storage policies, Edge Functions, real Google sign-in) cannot exist until stages 3 and a project exist. The Google → Supabase token exchange is covered only against a mocked server; **it has not been run against your project** — step 7 above is how you verify it.
 * `npm run typecheck` and `npm run build` could not be run where this was written (no package installation). Only the new files were type-checked, against stubs for the third-party packages. Run both before releasing.
 * The Supabase session is stored in `localStorage` (like the Google account already is). On a rooted device or in a compromised WebView it is readable; tokens are short-lived (refresh tokens are rotated by Supabase).
 * A user who deletes their online account must sign in with Google again to create a new one.
+
+* Stage 2a UI was type-checked only in isolation (react/lucide stubbed) and its data layer tested against a mocked server; the whole app has not been built here (no network). Reorder uses up/down buttons, not drag and drop.
+
+* Stage 2b: the book's hash is the local SHA-256 (recomputed from the file if the stored one is not a valid hash). Adding the same file twice is rejected by the database (`duplicate`). Book records are created with the owner's rights confirmation timestamp; nothing is shared until stage 3 sets `file_status = ready`.
