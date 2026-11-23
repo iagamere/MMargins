@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, BookOpen, ChevronDown, ChevronUp, Pencil, Plus, Search, Settings2, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, BookOpen, ChevronDown, Compass, ChevronUp, Pencil, Plus, Search, Settings2, Trash2, Upload } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useOnline } from '../store/useOnline';
 import { useT } from '../lib/i18n';
@@ -385,7 +385,7 @@ export function OnlineLibraryScreen() {
           </div>
           <h1>{t('onlineLib.title')}</h1>
         </header>
-        {onlineConfigured && <div className="acc-actions" style={{ marginBottom: 6 }}><button className="btn btn-sm" onClick={() => setVisiting(true)}><Search size={16} aria-hidden="true" />{t('visit.open')}</button></div>}
+        {onlineConfigured && <div className="acc-actions" style={{ marginBottom: 6 }}><button className="btn btn-sm" onClick={() => setVisiting(true)}><Search size={16} aria-hidden="true" />{t('visit.open')}</button><button className="btn btn-sm" onClick={() => navigate({ name: 'discover' })}><Compass size={16} aria-hidden="true" />{t('discover.open')}</button></div>}
         {body}
         {visiting && <VisitSheet onClose={() => setVisiting(false)} />}
       </div>

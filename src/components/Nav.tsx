@@ -11,7 +11,7 @@ const items = [
 ] as const;
 
 function active(route: string) {
-  return route === 'details' ? 'library' : route === 'visit' ? 'onlineLibrary' : route;
+  return route === 'details' ? 'library' : route === 'visit' || route === 'discover' ? 'onlineLibrary' : route;
 }
 
 /** Account circle: sits in the middle of the bottom bar and rises above it. Initial of the signed-in user + a sync dot (green = in sync, pulsing = moving books). */

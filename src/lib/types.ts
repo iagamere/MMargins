@@ -145,6 +145,7 @@ export type Route =
   | { name: 'settings' }
   | { name: 'account' }
   | { name: 'onlineLibrary' }
+  | { name: 'discover' }
   | { name: 'visit'; handle: string }
   | { name: 'details'; id: string }
   | { name: 'reader'; id: string };

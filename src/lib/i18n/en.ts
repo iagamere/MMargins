@@ -522,6 +522,20 @@ export const en = {
   "online.err.profileRequired": "Create your online profile (Account) first to unlock protected content.",
   "online.err.fileUnavailable": "The file could not be downloaded. It may no longer be shared.",
   "online.err.cancelled": "Cancelled.",
+  "discover.open": "Discover",
+  "discover.title": "Discover",
+  "discover.search": "Search public books and libraries",
+  "discover.books": "Books",
+  "discover.libraries": "Libraries",
+  "discover.hint": "Only books and libraries their owners made public appear here.",
+  "discover.noBooks": "No public book matches your search.",
+  "discover.noLibraries": "No public library matches your search.",
+  "discover.empty": "Nothing has been shared publicly yet.",
+  "discover.more": "Show more",
+  "discover.loading": "Searching…",
+  "discover.by": "by @{handle}",
+  "discover.bookCount": "{count} public books",
+  "discover.openLibrary": "Open",
 } as const;
 
 export type Dict = { [K in keyof typeof en]: string };

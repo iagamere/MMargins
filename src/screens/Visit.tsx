@@ -100,7 +100,7 @@ function VisitedCover({ book }: { book: VisitedBook }) {
   );
 }
 
-function VisitedRow({ book }: { book: VisitedBook }) {
+export function VisitedRow({ book, owner }: { book: VisitedBook; owner?: string }) {
   const { t, n } = useT();
   const navigate = useApp((s) => s.navigate);
   const toast = useApp((s) => s.toast);
@@ -134,6 +134,7 @@ function VisitedRow({ book }: { book: VisitedBook }) {
       <div className="olib-main">
         <div className="label" dir="auto">{book.title}</div>
         {book.author && <div className="hint olib-desc" dir="auto">{book.author}</div>}
+        {owner && <div className="hint" dir="auto">{owner}</div>}
         <div className="hint">{book.format.toUpperCase()} · {formatBytes(book.file_size)}</div>
         {!canRead && !canSave && <div className="hint">{t('visit.listedOnly')}</div>}
         {canRead && !book.download_allowed && <div className="hint">{t('visit.readOnly')}</div>}

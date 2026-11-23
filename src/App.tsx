@@ -17,6 +17,7 @@ import { SettingsScreen } from './screens/Settings';
 import { AccountScreen } from './screens/Account';
 import { OnlineLibraryScreen } from './screens/OnlineLibrary';
 import { VisitScreen } from './screens/Visit';
+import { DiscoverScreen } from './screens/Discover';
 import { ReaderScreen } from './reader/ReaderScreen';
 import { useOnline } from './store/useOnline';
 
@@ -105,6 +106,7 @@ export function App() {
         {route.name === 'settings' && <SettingsScreen />}
         {route.name === 'account' && <AccountScreen />}
         {route.name === 'onlineLibrary' && <OnlineLibraryScreen />}
+        {route.name === 'discover' && <DiscoverScreen />}
         {route.name === 'visit' && <VisitScreen key={route.handle} handle={route.handle} />}
         {route.name === 'details' && <DetailsScreen id={route.id} />}
         <BottomNav />

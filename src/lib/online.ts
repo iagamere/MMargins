@@ -658,3 +658,41 @@ export function fetchCover(ownerId: string, bookId: string): Promise<Blob | null
   return p;
 }
 export const clearCoverCache = () => coverCache.clear();
+
+/* ============================================================ discovery (stage 3c) */
+/** a public book found by search / browsing (the same fields a visitor sees, plus who owns it) */
+export interface DiscoveredBook extends VisitedBook {
+  owner_handle: string;
+  owner_name: string;
+}
+export interface DiscoveredLibrary {
+  handle: string;
+  display_name: string;
+  bio: string;
+  library_title: string;
+  library_description: string;
+  book_count: number;
+}
+export interface DiscoverPage<T> {
+  items: T[];
+  /** there is at least one more page */
+  more: boolean;
+}
+export const DISCOVER_PAGE = 30;
+
+/** the same cleaning the database does (it re-checks everything): blanks collapsed, length cut */
+export const cleanQuery = (q: string) => q.trim().replace(/\s+/g, ' ').slice(0, 120);
+
+async function discoverCall<T>(fn: 'discover_books' | 'discover_libraries', query: string, offset: number, pageSize: number): Promise<DiscoverPage<T>> {
+  // one extra row tells whether a next page exists
+  const rows = (await maybeAuthed(`/rest/v1/rpc/${fn}`, { method: 'POST', json: { p_query: cleanQuery(query), p_limit: pageSize + 1, p_offset: Math.max(0, offset) } })) as T[] | null;
+  const all = Array.isArray(rows) ? rows : [];
+  return { items: all.slice(0, pageSize), more: all.length > pageSize };
+}
+
+/** public, ready books whose title / author / owner match every word of `query` (empty query = newest first) */
+export const discoverBooks = (query: string, offset = 0, pageSize = DISCOVER_PAGE) => discoverCall<DiscoveredBook>('discover_books', query, offset, pageSize);
+
+/** public libraries that hold at least one public book, matched by owner or library name */
+export const discoverLibraries = (query: string, offset = 0, pageSize = DISCOVER_PAGE) =>
+  discoverCall<DiscoveredLibrary>('discover_libraries', query, offset, pageSize).then((p) => ({ ...p, items: p.items.map((l) => ({ ...l, book_count: Number(l.book_count) })) }));

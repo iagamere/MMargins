@@ -434,3 +434,60 @@ describe('visiting (stage 3b)', () => {
     expect((await online.fetchCover(owner, 'c2'))!.size).toBe(1);
   });
 });
+
+
+describe('discovery (stage 3c)', () => {
+  const row = (i: number) => ({ id: `b${i}`, owner_id: 'o1', title: `T${i}`, author: '', description: '', language: null, format: 'epub', file_size: 10, file_status: 'ready', has_cover: false, read_allowed: true, download_allowed: false, owner_handle: 'alice', owner_name: 'Alice' });
+
+  test('a signed-out visitor searches with the anon key; the query is cleaned; one extra row is requested', async () => {
+    handler = () => ({ body: [] });
+    await online.discoverBooks('  dune   saga ');
+    const c = calls.at(-1)!;
+    expect(c.url).toContain('/rest/v1/rpc/discover_books');
+    expect(JSON.parse(c.init.body)).toEqual({ p_query: 'dune saga', p_limit: 31, p_offset: 0 });
+    expect(c.init.headers.Authorization).toBeUndefined();
+    expect(c.init.headers.apikey).toBeTruthy();
+  });
+
+  test('a signed-in visitor uses her own token (so blocks apply)', async () => {
+    seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3600, user_id: 'u1' });
+    handler = () => ({ body: [] });
+    await online.discoverLibraries('x');
+    expect(calls.at(-1)!.init.headers.Authorization).toBe('Bearer AT');
+    expect(calls.at(-1)!.url).toContain('/rest/v1/rpc/discover_libraries');
+  });
+
+  test('paging: the extra row only says "more", it is never shown; offset is sent', async () => {
+    handler = () => ({ body: Array.from({ length: 31 }, (_, i) => row(i)) });
+    const p = await online.discoverBooks('', 0);
+    expect(p.items.length).toBe(30);
+    expect(p.more).toBe(true);
+    handler = () => ({ body: [row(1), row(2)] });
+    const q = await online.discoverBooks('', 30);
+    expect(q.more).toBe(false);
+    expect(JSON.parse(calls.at(-1)!.init.body).p_offset).toBe(30);
+    expect((await online.discoverBooks('', -7).then(() => JSON.parse(calls.at(-1)!.init.body))).p_offset).toBe(0);
+  });
+
+  test('the query is cut to 120 characters; a null body is an empty page', async () => {
+    handler = () => ({ body: null });
+    const p = await online.discoverBooks('x'.repeat(500));
+    expect(p).toEqual({ items: [], more: false });
+    expect(JSON.parse(calls.at(-1)!.init.body).p_query.length).toBe(120);
+  });
+
+  test('libraries: the count arrives as a number even when Postgres sends bigint as a string', async () => {
+    handler = () => ({ body: [{ handle: 'alice', display_name: 'A', bio: '', library_title: 'L', library_description: '', book_count: '4' }] });
+    const p = await online.discoverLibraries('');
+    expect(p.items[0].book_count).toBe(4);
+  });
+
+  test('errors are mapped: offline, rate limit, server', async () => {
+    handler = () => 'network';
+    await expect(online.discoverBooks('')).rejects.toMatchObject({ code: 'offline' });
+    handler = () => ({ status: 429, body: {} });
+    await expect(online.discoverBooks('')).rejects.toMatchObject({ code: 'rateLimited' });
+    handler = () => ({ status: 500, body: { message: 'boom' } });
+    await expect(online.discoverLibraries('')).rejects.toMatchObject({ code: 'unknown' });
+  });
+});

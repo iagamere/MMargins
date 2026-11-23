@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { ArrowLeft, Cloud, CloudUpload, LogOut, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Cloud, Compass, CloudUpload, LogOut, RefreshCw } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useT } from '../lib/i18n';
 import { signIn, signOut } from '../lib/auth';
 import { uploadAllLocal } from '../lib/cloud';
 import { formatBytes } from '../lib/utils';
+import { onlineConfigured } from '../lib/online';
 import { OnlineProfileCard } from '../components/OnlineProfileCard';
 
 export function AccountScreen() {
@@ -62,6 +63,12 @@ export function AccountScreen() {
           </div>
           <div className="top"><h1 className="h-display">{t('account.title')}</h1></div>
         </header>
+
+        {onlineConfigured && (
+          <div className="acc-actions" style={{ marginBottom: 12 }}>
+            <button className="btn btn-sm" onClick={() => navigate({ name: 'discover' })}><Compass size={16} aria-hidden="true" />{t('discover.open')}</button>
+          </div>
+        )}
 
         {!account ? (
           <div className="acc-card">
