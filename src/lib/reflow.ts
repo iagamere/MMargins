@@ -16,6 +16,8 @@ const RTL_RE = /[֐-ࣿיִ-﷿ﹰ-﻿]/g;
 const LTR_RE = /[A-Za-zÀ-ɏͰ-ϿЀ-ӿ]/g;
 /** Arabic combining marks (harakat, shadda, sukun, tanwin, dagger alef, Quranic signs). */
 const MARK_ONLY = /^[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7\u06E8\u06EA-\u06ED\u08D3-\u08FF]+$/;
+/** A line that opens a list entry / table-of-contents entry ("الفصل 3: …", "1. …", "• …", "Chapter 2 …"). */
+const LABEL = /^(?:[•▪◦·*\-–—]\s|\(?[0-9٠-٩]{1,4}[.):\-–]\s|(?:الفصل|الباب|الجزء|المجلد|القسم|المقدمة|الخاتمة|Chapter|Part|Volume|Section|Book|Act)(?=[\s0-9٠-٩:：.\-–])|[\p{L}]+\s*[0-9٠-٩]{1,4}\s*[:：.\-–])/iu;
 const TERMINATOR = /[.!?؟…:;"”»)\]’']\s*$/;
 
 interface Frag { s: string; x: number; y: number; w: number; h: number }
@@ -139,6 +141,13 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   const colW = Math.max(1, colRight - colLeft);
   const isHead = (l: Line) => l.h > body * 1.22 && l.text.length < 140;
 
+  /* List / contents pages: when most body lines stop far short of the text width the author broke the lines on purpose
+     (table of contents, verse, dialogue lists). Justified prose fills the width, so it never looks like this. */
+  const refW = Math.max(colW, vp.width * 0.5);
+  const bodyLines = kept.filter((l) => !isHead(l));
+  const narrow = bodyLines.filter((l) => l.x1 - l.x0 < refW * 0.65).length;
+  const listPage = bodyLines.length >= 4 && narrow / bodyLines.length >= 0.7;
+
   /* ---- lines → paragraphs ---- */
   type Raw = { text: string; head: boolean };
   const raws: Raw[] = [];
@@ -152,7 +161,8 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
       const bigGap = prev.y - l.y > typical * 1.55;
       const short = (prev.x1 - prev.x0) < colW * 0.8;
       const indent = l.rtl ? colRight - l.x1 > body * 0.8 : l.x0 - colLeft > body * 0.8;
-      startNew = head !== cur.head || bigGap || (ended && (short || indent));
+      const listItems = LABEL.test(prev.text) && LABEL.test(l.text); // two consecutive entries of a list
+      startNew = head !== cur.head || bigGap || (ended && (short || indent)) || listPage || listItems;
     }
     if (startNew) {
       cur = { text: l.text, head };
@@ -175,6 +185,6 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   return {
     paras,
     chars: paras.reduce((a, p) => a + p.text.length, 0),
-    endsOpen: !!last && last.kind === 'p' && !TERMINATOR.test(last.text),
+    endsOpen: !listPage && !!last && last.kind === 'p' && !TERMINATOR.test(last.text),
   };
 }

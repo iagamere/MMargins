@@ -84,7 +84,7 @@
 .notice svg { margin-top: 2px; color: var(--accent2); }
 
 /* PDF */
-.pdf-scroller { position: absolute; inset: 0; overflow: auto; -webkit-overflow-scrolling: touch; background: var(--pdf-bg, #e9e6df); touch-action: pan-x pan-y; overscroll-behavior: contain; }
+.pdf-scroller { position: absolute; inset: 0; overflow: auto; overflow-anchor: none; -webkit-overflow-scrolling: touch; background: var(--pdf-bg, #e9e6df); touch-action: pan-x pan-y; overscroll-behavior: contain; }
 .reader[data-theme='dark'] .pdf-scroller { --pdf-bg: #121412; }
 .reader[data-theme='sepia'] .pdf-scroller { --pdf-bg: #e4d6bb; }
 .pdf-pages { position: relative; margin-inline: auto; padding-top: calc(var(--safe-t) + 12px); padding-bottom: calc(var(--safe-b) + 24px); }
@@ -196,3 +196,7 @@
 
 /* the search hit being shown (reflowed PDF): soft highlight for a few seconds */
 ::highlight(rf-hit) { background-color: rgb(210 169 95 / 0.5); }
+
+/* live pinch / ctrl+wheel zoom: nothing to hit-test or repaint except the page bitmaps */
+.pdf-scroller[data-pinch] .textLayer, .pdf-scroller[data-pinch] .pdf-link { visibility: hidden; }
+.pdf-scroller[data-pinch='touch'] { overflow: hidden; }
