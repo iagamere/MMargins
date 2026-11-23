@@ -439,3 +439,8 @@ textarea.textarea:focus-visible { outline: none; border-color: var(--accent); }
 .visit-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .visit-row .olib-main { flex: 1 1 auto; }
 .visit-tools { flex-direction: column; align-items: flex-end; gap: 6px; }
+
+/* stage 4: small count bubble on chips and buttons */
+.count-dot { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; margin-inline-start: 6px; border-radius: 9px; background: var(--accent-ink); color: var(--on-accent); font-size: 11px; font-weight: 600; line-height: 1; }
+[data-theme='dark'] .count-dot { background: var(--accent); }
+.chip[aria-pressed='true'] .count-dot { background: var(--on-accent); color: var(--accent-ink); }

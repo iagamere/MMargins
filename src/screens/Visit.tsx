@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, BookOpen, Download, KeyRound, Lock, X } from 'lucide-react';
+import { ArrowLeft, Bell, BellOff, BookOpen, Check, Download, Flag, KeyRound, Lock, UserPlus, X } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useT } from '../lib/i18n';
 import { handleProblem, normalizeHandle } from '../lib/handle';
 import { formatBytes } from '../lib/utils';
 import {
-  fetchCover, hasSession, listVisitedBooks, listVisitedShelfLinks, onlineConfigured, redeemPassword, visitLibrary,
+  blockUser, cancelFriendRequest, fetchCover, hasSession, listVisitedBooks, listVisitedShelfLinks, onlineConfigured, redeemPassword, respondFriendRequest, sendFriendRequest, subscribeTo, unsubscribe, visitLibrary,
   type ProtectedType, type ShelfLink, type VisitedBook, type VisitResult,
 } from '../lib/online';
 import { allowed, importVisited, readVisited } from '../lib/visit';
 import { useOnline } from '../store/useOnline';
+import { useSocial } from '../store/useSocial';
+import { followOf, relationOf, requestWith } from '../lib/social';
 import { Sheet } from '../components/Sheet';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ReportSheet } from '../components/ReportSheet';
 import { useObjectUrl } from '../components/BookCover';
 import { codeOf } from '../components/AccessControls';
 
@@ -104,6 +108,8 @@ export function VisitedRow({ book, owner }: { book: VisitedBook; owner?: string 
   const { t, n } = useT();
   const navigate = useApp((s) => s.navigate);
   const toast = useApp((s) => s.toast);
+  const me = useOnline((s) => s.profile);
+  const [reporting, setReporting] = useState(false);
   const [pct, setPct] = useState<number | null>(null);
   const abort = useRef<AbortController | null>(null);
   const canRead = allowed(book, 'read');
@@ -147,9 +153,11 @@ export function VisitedRow({ book, owner }: { book: VisitedBook; owner?: string 
           <>
             {canRead && <button className="btn btn-sm btn-primary" onClick={() => void run('read')}><BookOpen size={16} aria-hidden="true" />{t('visit.read')}</button>}
             {canSave && <button className="btn btn-sm" onClick={() => void run('import')}><Download size={16} aria-hidden="true" />{t('visit.save')}</button>}
+            {me && me.id !== book.owner_id && <button className="icon-btn" onClick={() => setReporting(true)} aria-label={t('report.open')} title={t('report.open')}><Flag size={17} /></button>}
           </>
         )}
       </div>
+      {reporting && <ReportSheet type="book" id={book.id} label={book.title} onClose={() => setReporting(false)} />}
     </li>
   );
 }
@@ -166,6 +174,26 @@ export function VisitScreen({ handle }: { handle: string }) {
   const [load, setLoad] = useState<'loading' | 'ready' | 'error'>('loading');
   const [fail, setFail] = useState('unknown');
   const [unlock, setUnlock] = useState<{ type: ProtectedType; id: string } | null>(null);
+  const toast = useApp((s) => s.toast);
+  const rel = useSocial((s) => s.rel);
+  const subs = useSocial((s) => s.subs);
+  const [socialBusy, setSocialBusy] = useState(false);
+  const [confirmBlock, setConfirmBlock] = useState(false);
+  const [reportProfile, setReportProfile] = useState(false);
+  useEffect(() => { if (me) void useSocial.getState().load(); }, [me]);
+  /** one social action; the server decides, then both lists are re-read */
+  const social = async (fn: () => Promise<void>, ok?: string) => {
+    setSocialBusy(true);
+    try {
+      await fn();
+      if (ok) toast(ok, 'success');
+    } catch (e) {
+      toast(`online.err.${codeOf(e)}`, 'error');
+    } finally {
+      await useSocial.getState().load();
+      setSocialBusy(false);
+    }
+  };
 
   const goBack = () => { if (!back()) navigate({ name: 'library' }, { replace: true }); };
 
@@ -225,6 +253,24 @@ export function VisitScreen({ handle }: { handle: string }) {
             <div className="hint" dir="ltr">@{res.profile.handle}</div>
             {res.profile.bio && <p className="hint" dir="auto">{res.profile.bio}</p>}
           </div>
+          {me && res.profile.id !== me.id && (() => {
+            const r = relationOf(rel, res.profile.id, me.id);
+            const req = requestWith(rel, res.profile.id);
+            const follow = followOf(subs, 'library', lib.id);
+            return (
+              <div className="acc-actions" style={{ marginTop: 12 }}>
+                {r === 'none' && <button className="btn btn-sm btn-primary" disabled={socialBusy} onClick={() => void social(() => sendFriendRequest(res.profile.id), 'people.requestSent')}><UserPlus size={16} aria-hidden="true" />{t('people.add')}</button>}
+                {r === 'outgoing' && req && <button className="btn btn-sm" disabled={socialBusy} onClick={() => void social(() => cancelFriendRequest(req.id), 'people.cancelled')}>{t('people.sent')} · {t('people.cancelRequest')}</button>}
+                {r === 'incoming' && req && <button className="btn btn-sm btn-primary" disabled={socialBusy} onClick={() => void social(() => respondFriendRequest(req.id, true), 'people.accepted')}><Check size={16} aria-hidden="true" />{t('people.accept')}</button>}
+                {r === 'friend' && <span className="olib-badge"><Check size={14} aria-hidden="true" />{t('people.isFriend')}</span>}
+                {lib.state === 'open' && (follow
+                  ? <button className="btn btn-sm" disabled={socialBusy} aria-pressed="true" onClick={() => void social(() => unsubscribe(follow.id), 'people.unfollowed')}><BellOff size={16} aria-hidden="true" />{t('people.following')}</button>
+                  : <button className="btn btn-sm" disabled={socialBusy} aria-pressed="false" onClick={() => void social(() => subscribeTo('library', lib.id), 'people.followed')}><Bell size={16} aria-hidden="true" />{t('people.follow')}</button>)}
+                <button className="btn btn-sm btn-ghost" disabled={socialBusy} onClick={() => setConfirmBlock(true)}>{t('people.block')}</button>
+                <button className="btn btn-sm btn-ghost" onClick={() => setReportProfile(true)}><Flag size={16} aria-hidden="true" />{t('report.open')}</button>
+              </div>
+            );
+          })()}
         </section>
 
         {signedOut && <p className="hint olib-note">{t('visit.signInNeeded')}</p>}
@@ -248,7 +294,18 @@ export function VisitScreen({ handle }: { handle: string }) {
 
         {openShelves.map((s) => (
           <div key={s.id}>
-            <div className="olib-head"><h2 dir="auto">{s.name}</h2></div>
+            <div className="olib-head">
+              <h2 dir="auto">{s.name}</h2>
+              {me && res.profile.id !== me.id && (() => {
+                const f = followOf(subs, 'shelf', s.id);
+                return (
+                  <button className="icon-btn" disabled={socialBusy} aria-pressed={!!f} aria-label={f ? t('people.unfollow') : t('people.follow')}
+                    onClick={() => void social(() => (f ? unsubscribe(f.id) : subscribeTo('shelf', s.id)), f ? 'people.unfollowed' : 'people.followed')}>
+                    {f ? <BellOff size={18} /> : <Bell size={18} />}
+                  </button>
+                );
+              })()}
+            </div>
             {s.description && <p className="hint" dir="auto">{s.description}</p>}
             {(shelfOf.get(s.id) ?? []).length === 0 ? <p className="hint">{t('visit.shelfEmpty')}</p> : (
               <ul className="olib-list">{(shelfOf.get(s.id) ?? []).map((id) => <VisitedRow key={id} book={byId.get(id)!} />)}</ul>
@@ -271,6 +328,17 @@ export function VisitScreen({ handle }: { handle: string }) {
         )}
 
         {lib.state === 'open' && books.length === 0 && lockedShelves.length === 0 && res.locked_books.length === 0 && <p className="hint" style={{ marginTop: 16 }}>{t('visit.noBooks')}</p>}
+        {reportProfile && <ReportSheet type="profile" id={res.profile.id} label={`${res.profile.display_name} (@${res.profile.handle})`} onClose={() => setReportProfile(false)} />}
+        {confirmBlock && (
+          <ConfirmDialog
+            title={t('people.blockTitle', { name: res.profile.display_name })}
+            body={t('people.blockBody')}
+            confirmLabel={t('people.block')}
+            danger
+            onCancel={() => setConfirmBlock(false)}
+            onConfirm={() => { setConfirmBlock(false); void social(() => blockUser(res.profile.id), 'people.blocked').then(() => goBack()); }}
+          />
+        )}
         {unlock && <UnlockSheet type={unlock.type} id={unlock.id} onClose={() => setUnlock(null)} onUnlocked={() => void reload()} />}
       </>
     );

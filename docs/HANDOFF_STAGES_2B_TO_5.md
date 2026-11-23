@@ -50,7 +50,7 @@
 3. إعدادات كتاب: نمط الوصول، السماح بالقراءة/التنزيل، تأكيد عند التحويل لعام.
 4. ملاحظة: لا يوجد رفع ملفات بعد (مرحلة 3)، لذا كتب 2ب هي سجلات بيانات وصفية؛ قرّر مع المستخدم هل تُنشأ سجلات من الكتب المحلية قبل الرفع (الأرجح: تُؤجَّل إلى المرحلة 3 ويقتصر 2ب على ما هو ممكن).
 
-### المرحلة 3 — النشر والقراءة والاكتشاف (3أ و3ب و3ج منجزة في الكود؛ 3ج تحتاج تشغيل `0006_discovery.sql` وتجربة المستخدم. لا تعد كتابة الرفع ولا الزيارة ولا الاكتشاف)
+### المرحلة 3 — النشر والقراءة والاكتشاف (3أ و3ب و3ج منجزة في الكود، والمراحل 4 و5 أيضًا؛ 3ج تحتاج تشغيل `0006_discovery.sql` وتجربة المستخدم. لا تعد كتابة الرفع ولا الزيارة ولا الاكتشاف)
 ملاحظات 3ب: سياسة SELECT على `storage.objects` الآن للمالك فقط (`private.own_object_ok`) — وسّعها بدالة تستدعي `private.can_read_book_file` / `can_download_book_file` ثم أنشئ الروابط الموقّعة من العميل أو Edge Function، مع فرق القراءة/التنزيل. المسارات: `books/<uid>/<book>.<epub|pdf>` و`covers/<uid>/<book>.jpg`. حد الحجم 50MB (الخطة المجانية). اختبرها في `supabase/tests/` (المحاكاة تدعم storage.objects).
 - Storage: bucketان خاصان `books` و`covers`، سياسات تخزين تطابق قواعد 4، روابط موقّعة قصيرة العمر عبر **Edge Functions** (تتحقق بـ`can_read_book_file`/`can_download_book_file`).
 - رفع كتاب: من المكتبة المحلية مع **تأكيد حقوق النشر** (العمود `rights_confirmed_at NOT NULL`)، تتبع `file_status` (uploading→ready…)، حد حجم، استئناف عند فشل الشبكة.
@@ -98,3 +98,20 @@ npm run typecheck && npm run build   # لم تُشغَّل بعد!
 - الاختبارات: `supabase/tests/50_discovery_tests.sql` (58 فحصًا؛ كسرت ثلاث قواعد عمدًا فظهر الفشل) + 6 اختبارات عميل (المجموع 57).
 - النتائج المعروفة: 224 فحص SQL ناجحًا و57 اختبار عميل ناجحًا والبناء ينجح؛ `typecheck` يُظهر 11 خطأ أنواع قديمًا (في pdf/Epub/Pdf/Reflow) لم يُصلح بعد ولا يمنع البناء.
 - الخطوة التالية: المرحلة 4 (واجهة الأصدقاء والحظر والاشتراكات). الجداول والـRPCs جاهزة.
+
+## 10. ملحق المرحلة 4 (الأصدقاء والحظر والمتابعة)
+- `0007_social.sql`: دالتا قراءة فقط للمستخدم المسجَّل: `my_relationships()` (jsonb: friends/incoming/outgoing/blocked؛ ضرورية لأن `profiles_read` تُخفي المحظور عن الحاجب فلا يمكن سرد المحظورين من الجدول) و`my_subscriptions()` (أسماء مفسَّرة؛ لا يُعاد عنوان مكتبة/رف لم يعد مرئيًا للمشترك، `available=false`). الكتابة تتم بالـRPCs القديمة وبـ`subscriptions` عبر RLS.
+- العميل: دوال في `online.ts` (`fetchRelationships, findPerson, sendFriendRequest, respondFriendRequest, cancelFriendRequest, removeFriend, blockUser, unblockUser, fetchSubscriptions, subscribeTo, unsubscribe, setSubscriptionMuted`)، ورموز أخطاء جديدة (`alreadyFriends, alreadyPending, requestCooldown, invalidRequest, notAllowed`)، ومساعدات نقية في `lib/social.ts`، ومخزن `store/useSocial.ts` (يُصفَّر عند تسجيل الخروج)، وشاشة `screens/People.tsx` (مسار `people`)، وأزرار الصداقة/المتابعة/الحظر داخل `Visit.tsx`، وشارة الطلبات الواردة في زر «الأصدقاء» بشاشة المكتبة الأونلاين.
+- الاختبارات: `supabase/tests/60_social_tests.sql` (34 فحصًا، كسرت ثلاث قواعد عمدًا فظهر الفشل) + 12 اختبار عميل (المجموع 68). المجموع الكلي لـSQL: 316 فحصًا.
+- **المتابعة لا ترسل إشعارات بعد** (المرحلة 5)؛ الواجهة تقول ذلك صراحة. لا تدّعِ غير ذلك.
+- بقي `typecheck` بـ11 خطأ أنواع قديمًا (pdf/Epub/Pdf/Reflow) لم يُمسّ.
+- الخطوة التالية: المرحلة 5 (صندوق إشعارات داخل التطبيق + بلاغات وإزالة محتوى مع واجهة مشرف). تحتاج migration جديدة `0008_…` بجداول وRLS واختبارات؛ أنشئ الإشعارات من أحداث الصداقة والمتابعة ولا تضف Push قبل إعداد Firebase.
+
+## 11. ملحق المرحلة 5 (إشعارات داخل التطبيق + بلاغات وإزالة + شاشة مشرف)
+- `0008_notifications_reports.sql`: جداول `notifications` و`notification_prefs` و`reports` و`moderators` (كلها مغلقة عن الـAPI: RLS + سحب الصلاحيات؛ الوصول عبر RPCs تخص المستدعي فقط) و`private.removed_hashes`، وأعمدة `books.removed_at/removed_reason` (غير قابلة للقراءة من العميل). الإشعارات تُكتب بمشغِّلات فقط عبر `private.notify`، وتحترم التفضيلات والحظر وكتم المتابعة وقابلية رؤية الكتاب.
+- الإزالة (takedown): تخص الكتب فقط؛ تُجبر الكتاب على private وتُعطّل القراءة والتنزيل، وتضع هاش الملف في قائمة المنع، ويمنع مشغِّل `keep_removed_private` عميلًا (authenticated/anon) من التراجع؛ فقط `restore_book` للمشرف (يبقى الكتاب خاصًّا). المشرفون = صفوف في `moderators` تُضاف بـSQL فقط.
+- العميل: دوال في `online.ts` (`fetchNotifications, fetchUnreadCount, markNotificationsRead, deleteNotifications, fetchNotificationPrefs, saveNotificationPrefs, reportContent, fetchRemovedBooks, amIModerator, fetchModerationQueue, resolveReport, restoreBook`)، مخزن `useInbox`، شاشات `Notifications` و`Moderation` (مساران `notifications` و`moderation`)، و`ReportSheet` (أيقونة علم على كل كتاب في مكتبة زائرة + زر «إبلاغ» لصاحب المكتبة)، و`RemovedBooksNotice` في شاشة المكتبة الأونلاين، وشارة غير المقروء.
+- الاختبارات: `70_notifications_tests.sql` (47) و`80_moderation_tests.sql` (55) + 9 اختبارات عميل (المجموع 77). مجموع SQL: 418 فحصًا. كسرت 8 قواعد عمدًا فظهر الفشل.
+- **لا push** (لا Firebase) ولا استطلاع في الخلفية؛ الواجهة تقول ذلك صراحة. لا تدّعِ غير ذلك.
+- بقي `typecheck` بـ11 خطأ أنواع قديمًا (pdf/Epub/Pdf/Reflow).
+- المراحل 1–5 اكتملت في الكود. المتبقي: تجربة المستخدم الفعلية لكل مرحلة على Supabase حقيقي وجهاز حقيقي، ثم إصلاح أخطاء `typecheck` القديمة وإضافتها لسير عمل GitHub، ثم سياسة وبريد إزالة محتوى منشورة إن أُطلق للعامة.

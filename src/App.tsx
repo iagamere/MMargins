@@ -18,6 +18,9 @@ import { AccountScreen } from './screens/Account';
 import { OnlineLibraryScreen } from './screens/OnlineLibrary';
 import { VisitScreen } from './screens/Visit';
 import { DiscoverScreen } from './screens/Discover';
+import { PeopleScreen } from './screens/People';
+import { NotificationsScreen } from './screens/Notifications';
+import { ModerationScreen } from './screens/Moderation';
 import { ReaderScreen } from './reader/ReaderScreen';
 import { useOnline } from './store/useOnline';
 
@@ -107,6 +110,9 @@ export function App() {
         {route.name === 'account' && <AccountScreen />}
         {route.name === 'onlineLibrary' && <OnlineLibraryScreen />}
         {route.name === 'discover' && <DiscoverScreen />}
+        {route.name === 'people' && <PeopleScreen />}
+        {route.name === 'notifications' && <NotificationsScreen />}
+        {route.name === 'moderation' && <ModerationScreen />}
         {route.name === 'visit' && <VisitScreen key={route.handle} handle={route.handle} />}
         {route.name === 'details' && <DetailsScreen id={route.id} />}
         <BottomNav />

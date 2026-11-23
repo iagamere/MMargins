@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, BookOpen, ChevronDown, Compass, ChevronUp, Pencil, Plus, Search, Settings2, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, BookOpen, ChevronDown, Compass, ChevronUp, Pencil, Plus, Search, Settings2, Trash2, Upload, Users, Bell } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useOnline } from '../store/useOnline';
+import { useSocial } from '../store/useSocial';
+import { useInbox } from '../store/useInbox';
+import { RemovedBooksNotice } from '../components/RemovedBooksNotice';
 import { useT } from '../lib/i18n';
 import { getFile } from '../lib/db';
 import { effectiveBookMode, effectiveShelfMode, isLoosening, type AccessMode, type ShelfAccess } from '../lib/access';
@@ -174,6 +177,10 @@ export function OnlineLibraryScreen() {
   const profile = useOnline((s) => s.profile);
   const status = useOnline((s) => s.status);
   const connect = useOnline((s) => s.connect);
+  const incoming = useSocial((s) => s.rel?.incoming.length ?? 0);
+  useEffect(() => { if (profile) void useSocial.getState().load(); }, [profile]);
+  const unreadN = useInbox((s) => s.unread);
+  useEffect(() => { if (profile) void useInbox.getState().refresh(); }, [profile]);
 
   const [lib, setLib] = useState<OnlineLibrary | null>(null);
   const [shelves, setShelves] = useState<OnlineShelf[]>([]);
@@ -385,7 +392,8 @@ export function OnlineLibraryScreen() {
           </div>
           <h1>{t('onlineLib.title')}</h1>
         </header>
-        {onlineConfigured && <div className="acc-actions" style={{ marginBottom: 6 }}><button className="btn btn-sm" onClick={() => setVisiting(true)}><Search size={16} aria-hidden="true" />{t('visit.open')}</button><button className="btn btn-sm" onClick={() => navigate({ name: 'discover' })}><Compass size={16} aria-hidden="true" />{t('discover.open')}</button></div>}
+        {onlineConfigured && <div className="acc-actions" style={{ marginBottom: 6 }}><button className="btn btn-sm" onClick={() => setVisiting(true)}><Search size={16} aria-hidden="true" />{t('visit.open')}</button><button className="btn btn-sm" onClick={() => navigate({ name: 'discover' })}><Compass size={16} aria-hidden="true" />{t('discover.open')}</button><button className="btn btn-sm" onClick={() => navigate({ name: 'people' })}><Users size={16} aria-hidden="true" />{t('people.open')}{incoming > 0 && <span className="count-dot" aria-label={String(incoming)}>{incoming}</span>}</button><button className="btn btn-sm" onClick={() => navigate({ name: 'notifications' })}><Bell size={16} aria-hidden="true" />{t('notif.open')}{unreadN > 0 && <span className="count-dot" aria-label={String(unreadN)}>{unreadN}</span>}</button></div>}
+        {onlineConfigured && profile && <RemovedBooksNotice />}
         {body}
         {visiting && <VisitSheet onClose={() => setVisiting(false)} />}
       </div>

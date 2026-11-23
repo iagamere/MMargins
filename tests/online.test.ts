@@ -491,3 +491,249 @@ describe('discovery (stage 3c)', () => {
     await expect(online.discoverLibraries('')).rejects.toMatchObject({ code: 'unknown' });
   });
 });
+
+describe('people (stage 4)', () => {
+  const signedIn = () => seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3600, user_id: 'me-1' });
+  const lastBody = () => JSON.parse(calls.at(-1)!.init.body);
+
+  test('error mapping: each friend rule has its own code; RLS refusal and duplicate follow are distinguished', () => {
+    expect(online.mapError(400, { code: 'P0001', message: 'already_friends' }).code).toBe('alreadyFriends');
+    expect(online.mapError(400, { code: 'P0001', message: 'already_pending' }).code).toBe('alreadyPending');
+    expect(online.mapError(400, { code: 'P0001', message: 'cooldown' }).code).toBe('requestCooldown');
+    expect(online.mapError(400, { code: 'P0001', message: 'invalid_request' }).code).toBe('invalidRequest');
+    expect(online.mapError(400, { code: 'P0001', message: 'rate_limited' }).code).toBe('rateLimited');
+    expect(online.mapError(400, { code: 'P0001', message: 'handle_cooldown' }).code).toBe('handleCooldown');
+    expect(online.mapError(403, { code: '42501', message: 'new row violates row-level security policy for table "subscriptions"' }).code).toBe('notAllowed');
+    expect(online.mapError(409, { code: '23505', message: 'duplicate key value violates unique constraint "subscriptions_subscriber_id_target_type_target_id_key"' }).code).toBe('duplicate');
+  });
+
+  test('fetchRelationships: one RPC with the user token; missing lists become empty', async () => {
+    signedIn();
+    handler = () => ({ body: { friends: [{ id: 'f1', handle: 'bob', display_name: 'Bob', bio: '', since: 'x' }] } });
+    const r = await online.fetchRelationships();
+    expect(calls.at(-1)!.url).toContain('/rest/v1/rpc/my_relationships');
+    expect(calls.at(-1)!.init.headers.Authorization).toBe('Bearer AT');
+    expect(r.friends.length).toBe(1);
+    expect(r.incoming).toEqual([]);
+    expect(r.outgoing).toEqual([]);
+    expect(r.blocked).toEqual([]);
+    handler = () => ({ body: null });
+    expect((await online.fetchRelationships()).friends).toEqual([]);
+  });
+
+  test('findPerson: handle is normalised and encoded; nothing found -> null; an invalid handle makes no request', async () => {
+    signedIn();
+    handler = () => ({ body: [{ id: 'p1', handle: 'alice', display_name: 'Alice', bio: '' }] });
+    expect((await online.findPerson('  @Alice ')))!.toMatchObject({ id: 'p1' });
+    expect(calls.at(-1)!.url).toContain('/rest/v1/profiles?handle=eq.alice&select=id,handle,display_name,bio&limit=1');
+    handler = () => ({ body: [] });
+    expect(await online.findPerson('nobody')).toBeNull();
+    calls = [];
+    expect(await online.findPerson('   ')).toBeNull();
+    expect(calls.length).toBe(0);
+  });
+
+  test('friend actions call the right RPC with the right argument names', async () => {
+    signedIn();
+    handler = () => ({ body: null });
+    await online.sendFriendRequest('u9');
+    expect(calls.at(-1)!.url).toContain('/rpc/send_friend_request');
+    expect(lastBody()).toEqual({ p_recipient: 'u9' });
+    await online.respondFriendRequest('r1', true);
+    expect(calls.at(-1)!.url).toContain('/rpc/respond_friend_request');
+    expect(lastBody()).toEqual({ p_id: 'r1', p_accept: true });
+    await online.respondFriendRequest('r1', false);
+    expect(lastBody()).toEqual({ p_id: 'r1', p_accept: false });
+    await online.cancelFriendRequest('r2');
+    expect(calls.at(-1)!.url).toContain('/rpc/cancel_friend_request');
+    expect(lastBody()).toEqual({ p_id: 'r2' });
+    await online.removeFriend('u9');
+    expect(calls.at(-1)!.url).toContain('/rpc/remove_friend');
+    expect(lastBody()).toEqual({ p_user: 'u9' });
+    await online.blockUser('u9');
+    expect(calls.at(-1)!.url).toContain('/rpc/block_user');
+    await online.unblockUser('u9');
+    expect(calls.at(-1)!.url).toContain('/rpc/unblock_user');
+    expect(lastBody()).toEqual({ p_user: 'u9' });
+  });
+
+  test('a database refusal reaches the caller as a coded error', async () => {
+    signedIn();
+    handler = () => ({ status: 400, body: { code: 'P0001', message: 'already_friends' } });
+    await expect(online.sendFriendRequest('u9')).rejects.toMatchObject({ code: 'alreadyFriends' });
+    handler = () => ({ status: 400, body: { code: 'P0001', message: 'cooldown' } });
+    await expect(online.sendFriendRequest('u9')).rejects.toMatchObject({ code: 'requestCooldown' });
+    handler = () => 'network';
+    await expect(online.blockUser('u9')).rejects.toMatchObject({ code: 'offline' });
+  });
+
+  test('friend actions need a session', async () => {
+    store.clear();
+    online.reloadSessionFromStorage();
+    await expect(online.sendFriendRequest('u9')).rejects.toMatchObject({ code: 'notSignedIn' });
+    await expect(online.fetchRelationships()).rejects.toMatchObject({ code: 'notSignedIn' });
+  });
+
+  test('subscribeTo: inserts for the signed-in user only; following twice is fine; a refusal is notAllowed', async () => {
+    signedIn();
+    handler = () => ({ status: 201 });
+    await online.subscribeTo('library', 'lib1');
+    const c = calls.at(-1)!;
+    expect(c.url).toContain('/rest/v1/subscriptions');
+    expect(c.init.method).toBe('POST');
+    expect(c.init.headers.Prefer).toBe('return=minimal');
+    expect(lastBody()).toEqual({ subscriber_id: 'me-1', target_type: 'library', target_id: 'lib1' });
+    handler = () => ({ status: 409, body: { code: '23505', message: 'duplicate key value violates unique constraint "subscriptions_subscriber_id_target_type_target_id_key"' } });
+    await online.subscribeTo('shelf', 's1');
+    handler = () => ({ status: 403, body: { code: '42501', message: 'new row violates row-level security policy' } });
+    await expect(online.subscribeTo('shelf', 's2')).rejects.toMatchObject({ code: 'notAllowed' });
+    store.clear();
+    online.reloadSessionFromStorage();
+    await expect(online.subscribeTo('library', 'x')).rejects.toMatchObject({ code: 'notSignedIn' });
+  });
+
+  test('unsubscribe / mute / list use the subscription id and the right verbs', async () => {
+    signedIn();
+    handler = () => ({ status: 204 });
+    await online.unsubscribe('sub 1');
+    expect(calls.at(-1)!.init.method).toBe('DELETE');
+    expect(calls.at(-1)!.url).toContain('/rest/v1/subscriptions?id=eq.sub%201');
+    await online.setSubscriptionMuted('sub1', true);
+    expect(calls.at(-1)!.init.method).toBe('PATCH');
+    expect(lastBody()).toEqual({ muted: true });
+    handler = () => ({ body: [{ id: 's1', target_type: 'library', target_id: 'l1', muted: false, created_at: 'x', available: false, target_name: null, owner_handle: 'alice', owner_name: 'Alice' }] });
+    const list = await online.fetchSubscriptions();
+    expect(calls.at(-1)!.url).toContain('/rpc/my_subscriptions');
+    expect(list[0].target_name).toBeNull();
+    handler = () => ({ body: null });
+    expect(await online.fetchSubscriptions()).toEqual([]);
+  });
+});
+
+describe('notifications, reports, moderation (stage 5)', () => {
+  const signedIn = () => seed({ access_token: 'AT', refresh_token: 'RT', expires_at: now() + 3600, user_id: 'me-1' });
+  const body = () => JSON.parse(calls.at(-1)!.init.body);
+  const url = () => calls.at(-1)!.url;
+
+  test('new error codes: already reported, removed file, profile required, moderator refusal', () => {
+    expect(online.mapError(400, { code: 'P0001', message: 'already_reported' }).code).toBe('alreadyReported');
+    expect(online.mapError(400, { code: 'P0001', message: 'content_removed' }).code).toBe('contentRemoved');
+    expect(online.mapError(400, { code: 'P0001', message: 'profile_required' }).code).toBe('profileRequired');
+    expect(online.mapError(403, { code: '42501', message: 'forbidden' }).code).toBe('notAllowed');
+  });
+
+  test('the inbox is paged with one extra row; a signed-out caller is refused locally', async () => {
+    signedIn();
+    const row = (i: number) => ({ id: `n${i}`, type: 'new_book', created_at: 'x', read_at: null, actor_handle: 'a', actor_name: 'A', resource_type: 'book', resource_id: 'b', resource_title: 'T', detail: null });
+    handler = () => ({ body: Array.from({ length: 31 }, (_, i) => row(i)) });
+    const p = await online.fetchNotifications(0);
+    expect(url()).toContain('/rpc/my_notifications');
+    expect(body()).toEqual({ p_limit: 31, p_offset: 0 });
+    expect(p.items.length).toBe(30);
+    expect(p.more).toBe(true);
+    handler = () => ({ body: null });
+    expect(await online.fetchNotifications(30)).toEqual({ items: [], more: false });
+    expect(body().p_offset).toBe(30);
+    store.clear();
+    online.reloadSessionFromStorage();
+    await expect(online.fetchNotifications()).rejects.toMatchObject({ code: 'notSignedIn' });
+  });
+
+  test('unread count is always a number', async () => {
+    signedIn();
+    handler = () => ({ body: 3 });
+    expect(await online.fetchUnreadCount()).toBe(3);
+    handler = () => ({ body: null });
+    expect(await online.fetchUnreadCount()).toBe(0);
+    handler = () => ({ body: '7' });
+    expect(await online.fetchUnreadCount()).toBe(7);
+  });
+
+  test('mark read / delete: ids or null (= all of mine)', async () => {
+    signedIn();
+    handler = () => ({ body: null });
+    await online.markNotificationsRead(['a', 'b']);
+    expect(url()).toContain('/rpc/mark_notifications_read');
+    expect(body()).toEqual({ p_ids: ['a', 'b'] });
+    await online.markNotificationsRead();
+    expect(body()).toEqual({ p_ids: null });
+    await online.deleteNotifications(['a']);
+    expect(url()).toContain('/rpc/delete_notifications');
+    expect(body()).toEqual({ p_ids: ['a'] });
+    await online.deleteNotifications();
+    expect(body()).toEqual({ p_ids: null });
+  });
+
+  test('preferences: defaults when nothing is stored; save sends all three', async () => {
+    signedIn();
+    handler = () => ({ body: [] });
+    expect(await online.fetchNotificationPrefs()).toEqual({ friend_requests: true, friend_accepted: true, new_books: true });
+    handler = () => ({ body: [{ friend_requests: false, friend_accepted: true, new_books: false }] });
+    expect(await online.fetchNotificationPrefs()).toEqual({ friend_requests: false, friend_accepted: true, new_books: false });
+    handler = () => ({ body: null });
+    await online.saveNotificationPrefs({ friend_requests: false, friend_accepted: true, new_books: false });
+    expect(url()).toContain('/rpc/set_notification_prefs');
+    expect(body()).toEqual({ p_friend_requests: false, p_friend_accepted: true, p_new_books: false });
+  });
+
+  test('reportContent: argument names, details trimmed and cut to 1000; refusals are coded', async () => {
+    signedIn();
+    handler = () => ({ body: 'rid' });
+    await online.reportContent('book', 'b1', 'copyright', '  ' + 'x'.repeat(1500));
+    expect(url()).toContain('/rpc/report_content');
+    expect(body().p_type).toBe('book');
+    expect(body().p_id).toBe('b1');
+    expect(body().p_reason).toBe('copyright');
+    expect(body().p_details.length).toBe(1000);
+    handler = () => ({ status: 400, body: { code: 'P0001', message: 'already_reported' } });
+    await expect(online.reportContent('profile', 'p1', 'spam', '')).rejects.toMatchObject({ code: 'alreadyReported' });
+    handler = () => ({ status: 400, body: { code: 'P0001', message: 'not_found' } });
+    await expect(online.reportContent('book', 'hidden', 'spam', '')).rejects.toMatchObject({ code: 'notFound' });
+    handler = () => ({ status: 400, body: { code: 'P0001', message: 'rate_limited' } });
+    await expect(online.reportContent('book', 'b', 'spam', '')).rejects.toMatchObject({ code: 'rateLimited' });
+  });
+
+  test('moderator check: only an explicit true counts', async () => {
+    signedIn();
+    handler = () => ({ body: true });
+    expect(await online.amIModerator()).toBe(true);
+    handler = () => ({ body: false });
+    expect(await online.amIModerator()).toBe(false);
+    handler = () => ({ body: 'true' });
+    expect(await online.amIModerator()).toBe(false);
+    handler = () => ({ body: null });
+    expect(await online.amIModerator()).toBe(false);
+  });
+
+  test('moderation queue / resolve / restore', async () => {
+    signedIn();
+    handler = () => ({ body: [{ id: 'r1', target_type: 'book', target_id: 'b', reason: 'copyright', details: '', status: 'open', created_at: 'x', handled_at: null, resolution: null, note: '', reporter_handle: 'bob', target_title: 'T', owner_handle: 'alice', owner_name: 'A', book_removed: false, open_reports: '3' }] });
+    const q = await online.fetchModerationQueue('open');
+    expect(url()).toContain('/rpc/moderation_queue');
+    expect(body()).toEqual({ p_status: 'open', p_limit: 31, p_offset: 0 });
+    expect(q.items[0].open_reports).toBe(3);
+    await online.fetchModerationQueue('handled', 30);
+    expect(body()).toEqual({ p_status: 'handled', p_limit: 31, p_offset: 30 });
+    handler = () => ({ body: null });
+    await online.resolveReport('r1', 'takedown', '  ' + 'n'.repeat(2000));
+    expect(url()).toContain('/rpc/resolve_report');
+    expect(body().p_id).toBe('r1');
+    expect(body().p_action).toBe('takedown');
+    expect(body().p_note.length).toBe(1000);
+    await online.restoreBook('b9');
+    expect(url()).toContain('/rpc/restore_book');
+    expect(body()).toEqual({ p_book: 'b9' });
+    handler = () => ({ status: 403, body: { code: '42501', message: 'forbidden' } });
+    await expect(online.fetchModerationQueue('open')).rejects.toMatchObject({ code: 'notAllowed' });
+    await expect(online.resolveReport('r1', 'dismiss')).rejects.toMatchObject({ code: 'notAllowed' });
+  });
+
+  test('removed books of the owner', async () => {
+    signedIn();
+    handler = () => ({ body: [{ book_id: 'b', title: 'T', reason: 'illegal', removed_at: 'x' }] });
+    expect((await online.fetchRemovedBooks())[0].reason).toBe('illegal');
+    expect(url()).toContain('/rpc/my_removed_books');
+    handler = () => ({ body: null });
+    expect(await online.fetchRemovedBooks()).toEqual([]);
+  });
+});

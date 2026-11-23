@@ -1,11 +1,12 @@
-import { useState } from 'react';
-import { ArrowLeft, Cloud, Compass, CloudUpload, LogOut, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ArrowLeft, Bell, Cloud, Compass, ShieldCheck, Users, CloudUpload, LogOut, RefreshCw } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useT } from '../lib/i18n';
 import { signIn, signOut } from '../lib/auth';
 import { uploadAllLocal } from '../lib/cloud';
 import { formatBytes } from '../lib/utils';
 import { onlineConfigured } from '../lib/online';
+import { useInbox } from '../store/useInbox';
 import { OnlineProfileCard } from '../components/OnlineProfileCard';
 
 export function AccountScreen() {
@@ -20,6 +21,8 @@ export function AccountScreen() {
   const transfers = useApp((s) => s.transfers);
   const back = useApp((s) => s.back);
   const navigate = useApp((s) => s.navigate);
+  const moderator = useInbox((s) => s.moderator === true);
+  useEffect(() => { void useInbox.getState().refresh(); }, []);
   const toast = useApp((s) => s.toast);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +70,9 @@ export function AccountScreen() {
         {onlineConfigured && (
           <div className="acc-actions" style={{ marginBottom: 12 }}>
             <button className="btn btn-sm" onClick={() => navigate({ name: 'discover' })}><Compass size={16} aria-hidden="true" />{t('discover.open')}</button>
+            <button className="btn btn-sm" onClick={() => navigate({ name: 'people' })}><Users size={16} aria-hidden="true" />{t('people.open')}</button>
+            <button className="btn btn-sm" onClick={() => navigate({ name: 'notifications' })}><Bell size={16} aria-hidden="true" />{t('notif.open')}</button>
+            {moderator && <button className="btn btn-sm" onClick={() => navigate({ name: 'moderation' })}><ShieldCheck size={16} aria-hidden="true" />{t('mod.open')}</button>}
           </div>
         )}
 

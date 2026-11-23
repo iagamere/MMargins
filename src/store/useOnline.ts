@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { useSocial } from './useSocial';
+import { useInbox } from './useInbox';
 import { OnlineError, fetchMyProfile, hasSession, onlineConfigured, onlineSignOut, signInWithGoogleIdToken, type OnlineErrorCode, type OnlineProfile } from '../lib/online';
 
 type Status = 'idle' | 'connecting' | 'ready' | 'error';
@@ -54,6 +56,8 @@ export const useOnline = create<OnlineState>((set, get) => ({
 
   async reset() {
     await onlineSignOut();
+    useSocial.getState().reset();
+    useInbox.getState().reset();
     set({ status: 'idle', profile: null, error: null });
   },
 }));

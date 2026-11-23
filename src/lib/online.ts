@@ -28,7 +28,7 @@ export const onlineConfigured = !!URL_BASE && !!ANON_KEY;
 export type OnlineErrorCode =
   | 'notConfigured' | 'offline' | 'notSignedIn' | 'sessionExpired' | 'handleTaken' | 'handleInvalid' | 'handleReserved'
   | 'handleCooldown' | 'alreadyHasProfile' | 'rateLimited' | 'quota' | 'passwordInvalid' | 'notFound' | 'duplicate' | 'tooLarge' | 'uploadFailed'
-  | 'profileRequired' | 'fileUnavailable' | 'cancelled' | 'unknown';
+  | 'profileRequired' | 'fileUnavailable' | 'cancelled' | 'alreadyFriends' | 'alreadyPending' | 'requestCooldown' | 'invalidRequest' | 'notAllowed' | 'alreadyReported' | 'contentRemoved' | 'unknown';
 
 export class OnlineError extends Error {
   code: OnlineErrorCode;
@@ -99,6 +99,17 @@ export function mapError(status: number, body: unknown): OnlineError {
   if (status === 413 || String(b.statusCode ?? '') === '413' || /exceeded the maximum allowed size/i.test(msg)) return new OnlineError('tooLarge', msg);
   // a password grant needs the visitor's own profile (access_grants.user_id references profiles)
   if (code === '23503' && /access_grants/.test(msg)) return new OnlineError('profileRequired', msg);
+  // friends (stage 4). The database says exactly which rule stopped a request.
+  if (/already_friends/.test(msg)) return new OnlineError('alreadyFriends', msg);
+  if (/already_pending/.test(msg)) return new OnlineError('alreadyPending', msg);
+  if (/^cooldown$/.test(msg.trim())) return new OnlineError('requestCooldown', msg);
+  if (/invalid_request/.test(msg)) return new OnlineError('invalidRequest', msg);
+  // stage 5
+  if (/already_reported/.test(msg)) return new OnlineError('alreadyReported', msg);
+  if (/content_removed/.test(msg)) return new OnlineError('contentRemoved', msg);
+  if (/profile_required/.test(msg)) return new OnlineError('profileRequired', msg);
+  if (code === '23505' && /subscriptions_/.test(msg)) return new OnlineError('duplicate', msg);
+  if (code === '42501') return new OnlineError('notAllowed', msg);
   if (/upload_missing/.test(msg)) return new OnlineError('uploadFailed', msg);
   if (/password_invalid/.test(msg)) return new OnlineError('passwordInvalid', msg);
   if (/not_found/.test(msg)) return new OnlineError('notFound', msg);
@@ -696,3 +707,143 @@ export const discoverBooks = (query: string, offset = 0, pageSize = DISCOVER_PAG
 /** public libraries that hold at least one public book, matched by owner or library name */
 export const discoverLibraries = (query: string, offset = 0, pageSize = DISCOVER_PAGE) =>
   discoverCall<DiscoveredLibrary>('discover_libraries', query, offset, pageSize).then((p) => ({ ...p, items: p.items.map((l) => ({ ...l, book_count: Number(l.book_count) })) }));
+
+
+/* ============================================================ people (stage 4) */
+export interface Person { id: string; handle: string; display_name: string; bio: string }
+export interface PersonSince extends Person { since: string }
+export interface RequestEntry extends PersonSince { request_id: string }
+export interface Relationships { friends: PersonSince[]; incoming: RequestEntry[]; outgoing: RequestEntry[]; blocked: PersonSince[] }
+export type SubTarget = 'library' | 'shelf' | 'user' | 'series';
+export interface Subscription {
+  id: string;
+  target_type: SubTarget;
+  target_id: string;
+  muted: boolean;
+  created_at: string;
+  /** may the viewer still see the target? when false, `target_name` is null (the database withholds it) */
+  available: boolean;
+  target_name: string | null;
+  owner_handle: string | null;
+  owner_name: string | null;
+}
+
+const list = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
+
+/** friends, open requests (both ways) and the people I blocked, in one call (the table cannot list the blocked) */
+export async function fetchRelationships(): Promise<Relationships> {
+  const r = ((await rpc('my_relationships')) ?? {}) as Partial<Relationships>;
+  return { friends: list(r.friends), incoming: list(r.incoming), outgoing: list(r.outgoing), blocked: list(r.blocked) };
+}
+
+/** A person by @handle, or null. Someone who blocked me (or whom I blocked) is not found, exactly like an unknown handle. */
+export async function findPerson(handle: string): Promise<Person | null> {
+  const h = normalizeHandle(handle);
+  if (!h) return null;
+  const rows = (await authed(`/rest/v1/profiles?handle=eq.${encodeURIComponent(h)}&select=id,handle,display_name,bio&limit=1`)) as Person[] | null;
+  return rows?.[0] ?? null;
+}
+
+export const sendFriendRequest = async (userId: string): Promise<void> => void (await rpc('send_friend_request', { p_recipient: userId }));
+export const respondFriendRequest = async (requestId: string, accept: boolean): Promise<void> => void (await rpc('respond_friend_request', { p_id: requestId, p_accept: accept }));
+export const cancelFriendRequest = async (requestId: string): Promise<void> => void (await rpc('cancel_friend_request', { p_id: requestId }));
+export const removeFriend = async (userId: string): Promise<void> => void (await rpc('remove_friend', { p_user: userId }));
+export const blockUser = async (userId: string): Promise<void> => void (await rpc('block_user', { p_user: userId }));
+export const unblockUser = async (userId: string): Promise<void> => void (await rpc('unblock_user', { p_user: userId }));
+
+export async function fetchSubscriptions(): Promise<Subscription[]> {
+  return list<Subscription>(await rpc('my_subscriptions'));
+}
+
+/** Follows a library / shelf. Following something already followed is not an error. The database refuses what the viewer cannot see. */
+export async function subscribeTo(type: SubTarget, targetId: string): Promise<void> {
+  const uid = sessionUserId();
+  if (!uid) throw new OnlineError('notSignedIn');
+  try {
+    await authed('/rest/v1/subscriptions', { method: 'POST', headers: { Prefer: 'return=minimal' }, json: { subscriber_id: uid, target_type: type, target_id: targetId } });
+  } catch (e) {
+    if (!(e instanceof OnlineError && e.code === 'duplicate')) throw e;
+  }
+}
+export const unsubscribe = async (id: string): Promise<void> => void (await authed(`/rest/v1/subscriptions?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE' }));
+export const setSubscriptionMuted = async (id: string, muted: boolean): Promise<void> =>
+  void (await authed(`/rest/v1/subscriptions?id=eq.${encodeURIComponent(id)}`, { method: 'PATCH', json: { muted } }));
+
+
+/* ============================================================ notifications, reports, moderation (stage 5) */
+export type NotificationType = 'friend_request' | 'friend_accepted' | 'new_book' | 'content_removed' | 'content_restored' | 'report_resolved';
+export interface AppNotification {
+  id: string;
+  type: NotificationType;
+  created_at: string;
+  read_at: string | null;
+  actor_handle: string | null;
+  actor_name: string | null;
+  resource_type: 'request' | 'book' | 'report' | null;
+  resource_id: string | null;
+  /** only while the reader may still see the book */
+  resource_title: string | null;
+  detail: string | null;
+}
+export interface NotificationPrefs { friend_requests: boolean; friend_accepted: boolean; new_books: boolean }
+export const DEFAULT_PREFS: NotificationPrefs = { friend_requests: true, friend_accepted: true, new_books: true };
+export type ReportTarget = 'book' | 'library' | 'shelf' | 'profile';
+export type ReportReason = 'copyright' | 'illegal' | 'abuse' | 'spam' | 'other';
+export const REPORT_REASONS: ReportReason[] = ['copyright', 'illegal', 'abuse', 'spam', 'other'];
+export interface RemovedBook { book_id: string; title: string; reason: ReportReason; removed_at: string }
+export interface ModerationItem {
+  id: string;
+  target_type: ReportTarget;
+  target_id: string;
+  reason: ReportReason;
+  details: string;
+  status: 'open' | 'dismissed' | 'actioned';
+  created_at: string;
+  handled_at: string | null;
+  resolution: 'dismissed' | 'removed' | 'noted' | null;
+  note: string;
+  reporter_handle: string;
+  target_title: string | null;
+  owner_handle: string | null;
+  owner_name: string | null;
+  book_removed: boolean;
+  open_reports: number;
+}
+export type ModerationAction = 'dismiss' | 'takedown' | 'noted';
+export const NOTIFICATION_PAGE = 30;
+
+async function pagedRpc<T>(fn: string, extra: Record<string, unknown>, offset: number, pageSize: number): Promise<DiscoverPage<T>> {
+  const rows = await rpc(fn, { ...extra, p_limit: pageSize + 1, p_offset: Math.max(0, offset) });
+  const all = list<T>(rows);
+  return { items: all.slice(0, pageSize), more: all.length > pageSize };
+}
+
+export const fetchNotifications = (offset = 0, pageSize = NOTIFICATION_PAGE) => pagedRpc<AppNotification>('my_notifications', {}, offset, pageSize);
+export async function fetchUnreadCount(): Promise<number> {
+  return Number(await rpc('unread_notification_count')) || 0;
+}
+/** ids omitted = all of mine */
+export const markNotificationsRead = async (ids?: string[]): Promise<void> => void (await rpc('mark_notifications_read', { p_ids: ids ?? null }));
+export const deleteNotifications = async (ids?: string[]): Promise<void> => void (await rpc('delete_notifications', { p_ids: ids ?? null }));
+export async function fetchNotificationPrefs(): Promise<NotificationPrefs> {
+  const r = list<NotificationPrefs>(await rpc('my_notification_prefs'))[0];
+  return r ? { friend_requests: !!r.friend_requests, friend_accepted: !!r.friend_accepted, new_books: !!r.new_books } : { ...DEFAULT_PREFS };
+}
+export const saveNotificationPrefs = async (p: NotificationPrefs): Promise<void> =>
+  void (await rpc('set_notification_prefs', { p_friend_requests: p.friend_requests, p_friend_accepted: p.friend_accepted, p_new_books: p.new_books }));
+
+/** files a report; the database only accepts what the reporter can see, never your own content, max 10 a day */
+export async function reportContent(type: ReportTarget, id: string, reason: ReportReason, details: string): Promise<void> {
+  await rpc('report_content', { p_type: type, p_id: id, p_reason: reason, p_details: details.trim().slice(0, 1000) });
+}
+export async function fetchRemovedBooks(): Promise<RemovedBook[]> {
+  return list<RemovedBook>(await rpc('my_removed_books'));
+}
+export async function amIModerator(): Promise<boolean> {
+  return (await rpc('am_i_moderator')) === true;
+}
+export const fetchModerationQueue = (status: 'open' | 'handled', offset = 0, pageSize = NOTIFICATION_PAGE) =>
+  pagedRpc<ModerationItem>('moderation_queue', { p_status: status }, offset, pageSize).then((p) => ({ ...p, items: p.items.map((i) => ({ ...i, open_reports: Number(i.open_reports) })) }));
+export const resolveReport = async (id: string, action: ModerationAction, note = ''): Promise<void> =>
+  void (await rpc('resolve_report', { p_id: id, p_action: action, p_note: note.trim().slice(0, 1000) }));
+export const restoreBook = async (bookId: string): Promise<void> => void (await rpc('restore_book', { p_book: bookId }));
