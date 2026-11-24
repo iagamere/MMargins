@@ -9,11 +9,11 @@ import {
 import { codeOf } from '../components/AccessControls';
 import { VisitedRow } from './Visit';
 
-type Tab = 'books' | 'libraries';
+type Tab = 'books' | 'libraries' | 'shelves' | 'posts';
 
 /** Public books and libraries only. The database decides what is public (and hides blocked people);
  *  this screen just asks, pages and shows. */
-export function DiscoverScreen() {
+export function DiscoverScreen({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, n } = useT();
   const navigate = useApp((s) => s.navigate);
   const back = useApp((s) => s.back);
@@ -41,6 +41,7 @@ export function DiscoverScreen() {
     if (offset === 0) setState('loading');
     else setPaging(true);
     try {
+      if (tab === 'shelves' || tab === 'posts') return;
       if (tab === 'books') {
         const p = await discoverBooks(q, offset);
         if (mine !== seq.current) return;
@@ -62,11 +63,12 @@ export function DiscoverScreen() {
     }
   }, [tab, q]);
 
-  useEffect(() => { if (onlineConfigured) void run(0); }, [run]);
+  useEffect(() => { if (onlineConfigured && tab !== 'shelves' && tab !== 'posts') void run(0); }, [run, tab]);
 
-  const shown = tab === 'books' ? books.length : libs.length;
+  const shown = tab === 'books' ? books.length : tab === 'libraries' ? libs.length : 0;
   let body;
   if (!onlineConfigured) body = <p className="hint">{t('online.notConfigured')}</p>;
+  else if (tab === 'shelves' || tab === 'posts') body = <p className="hint" role="status" style={{ marginTop: 16 }}>{t('home.soon')}</p>;
   else if (state === 'loading') body = <p className="hint" role="status" style={{ marginTop: 16 }}>{t('discover.loading')}</p>;
   else if (state === 'error') {
     body = (
@@ -107,15 +109,16 @@ export function DiscoverScreen() {
     );
   }
 
-  return (
-    <div className="screen">
-      <div className="screen-pad" style={{ maxWidth: 720 }}>
-        <header className="page-head">
-          <div style={{ marginInline: -10, marginBottom: -6 }}>
-            <button className="icon-btn" onClick={goBack} aria-label={t('common.back')}><ArrowLeft className="flip" size={22} /></button>
-          </div>
-          <h1>{t('discover.title')}</h1>
-        </header>
+  const inner = (
+    <div className="screen-pad" style={{ maxWidth: 720 }}>
+        {!embedded && (
+          <header className="page-head">
+            <div style={{ marginInline: -10, marginBottom: -6 }}>
+              <button className="icon-btn" onClick={goBack} aria-label={t('common.back')}><ArrowLeft className="flip" size={22} /></button>
+            </div>
+            <h1>{t('discover.title')}</h1>
+          </header>
+        )}
         <label className="field">
           <Search size={18} aria-hidden="true" />
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} maxLength={120} placeholder={t('discover.search')} aria-label={t('discover.search')} enterKeyHint="search" />
@@ -124,13 +127,13 @@ export function DiscoverScreen() {
           )}
         </label>
         <div className="chips" role="group" aria-label={t('discover.title')} style={{ marginTop: 10 }}>
-          {(['books', 'libraries'] as Tab[]).map((x) => (
-            <button key={x} className="chip" aria-pressed={tab === x} onClick={() => { if (x !== tab) { setMore(false); setTab(x); } }}>{t(`discover.${x}`)}</button>
+          {(['books', 'libraries', 'shelves', 'posts'] as Tab[]).map((x) => (
+            <button key={x} className="chip" aria-pressed={tab === x} onClick={() => { if (x !== tab) { setMore(false); setTab(x); } }}>{t(x === 'shelves' || x === 'posts' ? `home.${x}` : `discover.${x}`)}</button>
           ))}
         </div>
-        <p className="hint olib-note">{t('discover.hint')}</p>
+        {tab !== 'shelves' && tab !== 'posts' && <p className="hint olib-note">{t('discover.hint')}</p>}
         {body}
-      </div>
     </div>
   );
+  return embedded ? inner : <div className="screen">{inner}</div>;
 }

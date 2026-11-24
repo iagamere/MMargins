@@ -7,7 +7,6 @@ import { signIn } from '../lib/auth';
 import { handleProblem, normalizeHandle } from '../lib/handle';
 import { OnlineError, changeHandle, createProfile, deleteOnlineAccount, isHandleAvailable, onlineConfigured, updateMyProfile, type OnlineErrorCode } from '../lib/online';
 import { ConfirmDialog } from './ConfirmDialog';
-import { VisitSheet } from '../screens/Visit';
 
 type Check = 'idle' | 'checking' | 'ok' | 'taken' | { problem: string } | 'error';
 
@@ -83,7 +82,6 @@ export function OnlineProfileCard() {
   const [busy, setBusy] = useState(false);
   const [fail, setFail] = useState<OnlineErrorCode | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [visiting, setVisiting] = useState(false);
 
   useEffect(() => {
     if (account && status === 'idle') void connect();
@@ -249,10 +247,6 @@ export function OnlineProfileCard() {
           <p className="hint">{t('online.publicNote')}</p>
           {errorLine(fail)}
           <div className="acc-actions">
-            <button className="btn btn-sm btn-primary" onClick={() => useApp.getState().navigate({ name: 'onlineLibrary' })}>
-              <Library size={16} aria-hidden="true" />{t('onlineLib.open')}
-            </button>
-            <button className="btn btn-sm" onClick={() => setVisiting(true)}><Search size={16} aria-hidden="true" />{t('visit.open')}</button>
             <button className="btn btn-sm" onClick={startEdit}>{t('online.edit')}</button>
             <button className="btn btn-sm btn-ghost btn-danger" onClick={() => setConfirmDelete(true)}>
               <Trash2 size={16} aria-hidden="true" />{t('online.delete')}
@@ -261,7 +255,6 @@ export function OnlineProfileCard() {
         </>
       )}
 
-      {visiting && <VisitSheet onClose={() => setVisiting(false)} />}
       {confirmDelete && (
         <ConfirmDialog
           danger

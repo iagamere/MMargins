@@ -1,13 +1,10 @@
-import { useEffect, useState } from 'react';
-import { ArrowLeft, Bell, Cloud, Compass, ShieldCheck, Users, CloudUpload, LogOut, RefreshCw } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowLeft, Cloud, CloudUpload, LogOut, RefreshCw } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useT } from '../lib/i18n';
 import { signIn, signOut } from '../lib/auth';
 import { uploadAllLocal } from '../lib/cloud';
 import { formatBytes } from '../lib/utils';
-import { onlineConfigured } from '../lib/online';
-import { useInbox } from '../store/useInbox';
-import { OnlineProfileCard } from '../components/OnlineProfileCard';
 
 export function AccountScreen() {
   const { t, n } = useT();
@@ -21,14 +18,12 @@ export function AccountScreen() {
   const transfers = useApp((s) => s.transfers);
   const back = useApp((s) => s.back);
   const navigate = useApp((s) => s.navigate);
-  const moderator = useInbox((s) => s.moderator === true);
-  useEffect(() => { void useInbox.getState().refresh(); }, []);
   const toast = useApp((s) => s.toast);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const goBack = () => {
-    if (!back()) navigate({ name: 'library' }, { replace: true });
+    if (!back()) navigate({ name: 'settings' }, { replace: true });
   };
 
   const doSignIn = async () => {
@@ -67,15 +62,6 @@ export function AccountScreen() {
           <div className="top"><h1 className="h-display">{t('account.title')}</h1></div>
         </header>
 
-        {onlineConfigured && (
-          <div className="acc-actions" style={{ marginBottom: 12 }}>
-            <button className="btn btn-sm" onClick={() => navigate({ name: 'discover' })}><Compass size={16} aria-hidden="true" />{t('discover.open')}</button>
-            <button className="btn btn-sm" onClick={() => navigate({ name: 'people' })}><Users size={16} aria-hidden="true" />{t('people.open')}</button>
-            <button className="btn btn-sm" onClick={() => navigate({ name: 'notifications' })}><Bell size={16} aria-hidden="true" />{t('notif.open')}</button>
-            {moderator && <button className="btn btn-sm" onClick={() => navigate({ name: 'moderation' })}><ShieldCheck size={16} aria-hidden="true" />{t('mod.open')}</button>}
-          </div>
-        )}
-
         {!account ? (
           <div className="acc-card">
             <div className="acc-avatar big off" aria-hidden="true"><Cloud size={26} strokeWidth={1.6} /></div>
@@ -107,8 +93,6 @@ export function AccountScreen() {
                 </button>
               </div>
             </div>
-
-            <OnlineProfileCard />
 
             <h2 className="eyebrow section-title">{t('account.library')}</h2>
             <div className="group">

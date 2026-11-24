@@ -18,6 +18,7 @@ import { AccountScreen } from './screens/Account';
 import { OnlineLibraryScreen } from './screens/OnlineLibrary';
 import { VisitScreen } from './screens/Visit';
 import { DiscoverScreen } from './screens/Discover';
+import { HomeScreen } from './screens/Home';
 import { PeopleScreen } from './screens/People';
 import { NotificationsScreen } from './screens/Notifications';
 import { ModerationScreen } from './screens/Moderation';
@@ -106,6 +107,7 @@ export function App() {
       <div className="shell-body">
         {route.name === 'library' && <LibraryScreen />}
         {route.name === 'continue' && <ContinueScreen />}
+        {route.name === 'home' && <HomeScreen />}
         {route.name === 'settings' && <SettingsScreen />}
         {route.name === 'account' && <AccountScreen />}
         {route.name === 'onlineLibrary' && <OnlineLibraryScreen />}

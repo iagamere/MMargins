@@ -1,5 +1,4 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 import { useT } from '../lib/i18n';
 import { isPasswordError, loadPdfjs, openPdf, resolveOutlineDest, type OpenedPdf } from '../lib/pdf';
 import type { ErrorCode, ReaderApi, ReaderPosition, ReaderReadyInfo, SearchHit, Settings, ThemeName, TocItem } from '../lib/types';
@@ -19,8 +18,6 @@ export interface PdfViewProps {
 }
 
 type Size = { w: number; h: number };
-/** a point of the document pinned to a point of the screen: which page, where inside it, and where on screen it must end up */
-type Anchor = { index: number; rx: number; ry: number; fx: number; fy: number };
 
 /* ---------- tiny render-concurrency limiter ---------- */
 export function makeLimiter(max: number) {
@@ -38,58 +35,6 @@ export function makeLimiter(max: number) {
     release: () => {
       active--;
       q.shift()?.();
-    },
-  };
-}
-
-/* Same idea, but the next job to run is the one whose page is closest to the viewport right now. */
-export function makePriorityLimiter(max: number) {
-  let active = 0;
-  const q: Array<{ prio: () => number; go: (granted: boolean) => void }> = [];
-  const pump = () => {
-    while (active < max && q.length) {
-      let best = 0;
-      let bestP = Infinity;
-      for (let i = 0; i < q.length; i++) {
-        let v = Infinity;
-        try {
-          v = q[i].prio();
-        } catch {
-          /* keep Infinity */
-        }
-        if (v < bestP) {
-          bestP = v;
-          best = i;
-        }
-      }
-      const [job] = q.splice(best, 1);
-      active++;
-      job.go(true);
-    }
-  };
-  return {
-    /** resolves true once a slot is granted (call release), false if cancelled while waiting */
-    acquire(prio: () => number) {
-      let entry!: { prio: () => number; go: (granted: boolean) => void };
-      const promise = new Promise<boolean>((res) => {
-        entry = { prio, go: res };
-        q.push(entry);
-        pump();
-      });
-      return {
-        promise,
-        cancel() {
-          const i = q.indexOf(entry);
-          if (i >= 0) {
-            q.splice(i, 1);
-            entry.go(false);
-          }
-        },
-      };
-    },
-    release() {
-      active--;
-      pump();
     },
   };
 }
@@ -125,10 +70,7 @@ export function makeRegistry(getRoot: () => Element | null) {
 }
 
 export type Registry = ReturnType<typeof makeRegistry>;
-const limiter = makePriorityLimiter(2);
-const MAX_CANVAS_PX = 9_000_000; // per page canvas; keeps very high zoom from stalling / exhausting phone memory
-const ZMIN = 0.5;
-const ZMAX = 5;
+const limiter = makeLimiter(2);
 
 /* ---------- a single page ---------- */
 interface SlotProps {
@@ -180,26 +122,8 @@ const PageSlot = memo(function PageSlot(p: SlotProps) {
     let cancelled = false;
     let task: any;
     let textLayer: any;
-    // pages on screen first, then the nearest ones — never in plain document order
-    const prio = () => {
-      const el = slot.current;
-      if (!el) return Infinity;
-      const r = el.getBoundingClientRect();
-      const H = window.innerHeight;
-      const gap = r.bottom < 0 ? -r.bottom : r.top > H ? r.top - H : 0;
-      return gap + Math.abs((r.top + r.bottom) / 2 - H / 2) * 0.001;
-    };
-    const ticket = limiter.acquire(prio);
     (async () => {
-      const granted = await ticket.promise;
-      if (!granted) return;
-      let held = true;
-      const free = () => {
-        if (held) {
-          held = false;
-          limiter.release();
-        }
-      };
+      await limiter.acquire();
       try {
         if (cancelled) return;
         const page = await doc.getPage(num);
@@ -208,7 +132,7 @@ const PageSlot = memo(function PageSlot(p: SlotProps) {
         let out = dpr;
         const base = page.getViewport({ scale: cssScale });
         // cap very large canvases (memory on phones)
-        const maxPx = MAX_CANVAS_PX;
+        const maxPx = 14_000_000;
         if (base.width * base.height * out * out > maxPx) out = Math.sqrt(maxPx / (base.width * base.height));
         const viewport = page.getViewport({ scale: cssScale * out });
         const canvas = document.createElement('canvas');
@@ -229,7 +153,6 @@ const PageSlot = memo(function PageSlot(p: SlotProps) {
           c.height = 0;
         });
         setFailed(false);
-        free(); // the heavy canvas work is done: let the next page start while this one builds its text layer
 
         // selectable text
         th.replaceChildren();
@@ -269,12 +192,11 @@ const PageSlot = memo(function PageSlot(p: SlotProps) {
       } catch (e: any) {
         if (e?.name !== 'RenderingCancelledException' && !cancelled) setFailed(true);
       } finally {
-        free();
+        limiter.release();
       }
     })();
     return () => {
       cancelled = true;
-      ticket.cancel();
       try {
         task?.cancel();
       } catch {
@@ -338,11 +260,9 @@ export function PdfView(props: PdfViewProps) {
   const registry = useMemo(() => makeRegistry(() => scrollerRef.current), []);
   const visible = useRef(new Map<number, number>());
   const restoring = useRef(true);
-  const pending = useRef<null | Anchor>(null);
-  const zoomRef = useRef(1);
+  const pending = useRef<null | { type: 'page'; page: number; offset: number } | { type: 'ratio'; ratio: number; fx: number; fy: number }>(null);
   const textCache = useRef(new Map<number, string>());
   const apiRef = useRef<ReaderApi | null>(null);
-  const onExternalLink = useCallback((u: string) => P.current.onExternalLink(u), []);
   const tocRef = useRef<TocItem[]>([]);
   const failedLabel = t('reader.pageFailed');
 
@@ -445,13 +365,10 @@ export function PdfView(props: PdfViewProps) {
     const sc = scrollerRef.current;
     if (!sc || !cssScale) return;
     const pend = pending.current;
-    if (pend) {
+    if (prevScale.current && pend?.type === 'ratio') {
+      sc.scrollLeft = (sc.scrollLeft + pend.fx) * pend.ratio - pend.fx;
+      sc.scrollTop = (sc.scrollTop + pend.fy) * pend.ratio - pend.fy;
       pending.current = null;
-      const el = pagesRef.current?.children[pend.index] as HTMLElement | undefined;
-      if (prevScale.current && el) {
-        sc.scrollLeft = el.offsetLeft + pend.rx * el.offsetWidth - pend.fx;
-        sc.scrollTop = el.offsetTop + pend.ry * el.offsetHeight - pend.fy;
-      }
     }
     prevScale.current = cssScale;
   }, [cssScale]);
@@ -559,147 +476,54 @@ export function PdfView(props: PdfViewProps) {
   }, [paged, scrollToPage]);
 
   /* ----- zoom (buttons, ctrl+wheel, pinch) ----- */
-  zoomRef.current = zoom;
-
-  const captureAnchor = useCallback((fx: number, fy: number): Anchor | null => {
+  const applyZoom = useCallback((factor: number, fx?: number, fy?: number) => {
     const sc = scrollerRef.current;
-    const kids = pagesRef.current?.children;
-    if (!sc || !kids || !kids.length) return null;
-    const y = sc.scrollTop + fy;
-    let lo = 0;
-    let hi = kids.length - 1;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if ((kids[mid] as HTMLElement).offsetTop <= y) lo = mid;
-      else hi = mid - 1;
-    }
-    const el = kids[lo] as HTMLElement;
-    return {
-      index: lo,
-      ry: (y - el.offsetTop) / Math.max(1, el.offsetHeight),
-      rx: (sc.scrollLeft + fx - el.offsetLeft) / Math.max(1, el.offsetWidth),
-      fx,
-      fy,
-    };
+    if (!sc) return;
+    setZoom((z) => {
+      const nz = clamp(z * factor, 0.5, 5);
+      const ratio = nz / z;
+      if (ratio !== 1) pending.current = { type: 'ratio', ratio, fx: fx ?? sc.clientWidth / 2, fy: fy ?? sc.clientHeight / 2 };
+      return nz;
+    });
   }, []);
 
-  // discrete zoom (toolbar buttons): one re-layout, anchored on the page under (fx, fy)
-  const applyZoom = useCallback(
-    (factor: number, fx?: number, fy?: number) => {
-      const sc = scrollerRef.current;
-      if (!sc) return;
-      const z = zoomRef.current;
-      const nz = clamp(z * factor, ZMIN, ZMAX);
-      if (Math.abs(nz - z) < 1e-4) return;
-      const x = fx ?? sc.clientWidth / 2;
-      const y = fy ?? sc.clientHeight / 2;
-      const a = captureAnchor(x, y);
-      if (a) pending.current = a;
-      zoomRef.current = nz;
-      setZoom(nz);
-    },
-    [captureAnchor]
-  );
-
-  // Live zoom: while the fingers move only a GPU transform changes (no React, no re-layout, no re-render of pages);
-  // the real zoom is committed once, synchronously, when the gesture ends.
   useEffect(() => {
     const sc = scrollerRef.current!;
     const pages = pagesRef.current!;
-    type G = { z0: number; d0: number; anchor: Anchor; m0: { x: number; y: number }; m: { x: number; y: number }; ratio: number; left: number; top: number };
-    let g: G | null = null;
-    let raf = 0;
-    let wheelTimer: ReturnType<typeof setTimeout> | undefined;
-
-    const paint = () => {
-      raf = 0;
-      if (!g) return;
-      pages.style.transform = `translate3d(${g.m.x - g.m0.x}px, ${g.m.y - g.m0.y}px, 0) scale(${g.ratio})`;
-    };
-    const schedule = () => {
-      if (!raf) raf = requestAnimationFrame(paint);
-    };
-
-    const begin = (mx: number, my: number, d0: number, mode: 'touch' | 'wheel') => {
-      const a = captureAnchor(mx, my);
-      if (!a) return false;
-      const r = sc.getBoundingClientRect();
-      g = { z0: zoomRef.current, d0, anchor: a, m0: { x: mx, y: my }, m: { x: mx, y: my }, ratio: 1, left: r.left, top: r.top };
-      pages.style.transformOrigin = `${mx + sc.scrollLeft}px ${my + sc.scrollTop}px`;
-      pages.style.willChange = 'transform';
-      sc.dataset.pinch = mode; // CSS: freeze native panning (touch) and hide the text layers while gesturing
-      return true;
-    };
-
-    const end = () => {
-      if (!g) return;
-      const cur = g;
-      g = null;
-      if (raf) {
-        cancelAnimationFrame(raf);
-        raf = 0;
-      }
-      if (wheelTimer) {
-        clearTimeout(wheelTimer);
-        wheelTimer = undefined;
-      }
-      // drop the preview first (nothing is painted until this task ends), then commit the real layout in the same task
-      pages.style.transform = '';
-      pages.style.transformOrigin = '';
-      pages.style.willChange = '';
-      delete sc.dataset.pinch;
-      if (Math.abs(cur.ratio - 1) > 0.01) {
-        const nz = clamp(cur.z0 * cur.ratio, ZMIN, ZMAX);
-        pending.current = { ...cur.anchor, fx: cur.m.x, fy: cur.m.y };
-        zoomRef.current = nz;
-        flushSync(() => setZoom(nz));
-      } else {
-        // fingers only slid: keep the pan instead of snapping back
-        sc.scrollLeft -= cur.m.x - cur.m0.x;
-        sc.scrollTop -= cur.m.y - cur.m0.y;
-      }
-    };
-
-    const mid = (e: TouchEvent, r: { left: number; top: number }) => ({
-      x: (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left,
-      y: (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top,
-    });
+    let startDist = 0;
+    let ratio = 1;
+    let mid = { x: 0, y: 0 };
+    let pinching = false;
     const dist = (e: TouchEvent) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-
     const ts = (e: TouchEvent) => {
-      if (e.touches.length !== 2 || g) return;
-      const d0 = dist(e);
-      if (d0 < 1) return;
-      const r = sc.getBoundingClientRect();
-      const m = mid(e, r);
-      begin(m.x, m.y, d0, 'touch');
+      if (e.touches.length === 2) {
+        pinching = true;
+        startDist = dist(e);
+        ratio = 1;
+        const r = sc.getBoundingClientRect();
+        mid = { x: (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left, y: (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top };
+        pages.style.transformOrigin = `${mid.x + sc.scrollLeft}px ${mid.y + sc.scrollTop}px`;
+      }
     };
     const tm = (e: TouchEvent) => {
-      if (!g || g.d0 === 0 || e.touches.length !== 2) return;
-      if (e.cancelable) e.preventDefault();
-      g.m = mid(e, g);
-      g.ratio = clamp(dist(e) / g.d0, ZMIN / g.z0, ZMAX / g.z0);
-      schedule();
+      if (!pinching || e.touches.length !== 2) return;
+      e.preventDefault();
+      ratio = clamp(dist(e) / startDist, 0.4, 3);
+      pages.style.transform = `scale(${ratio})`;
     };
     const te = (e: TouchEvent) => {
-      if (!g || g.d0 === 0 || e.touches.length >= 2) return;
-      end();
+      if (!pinching || e.touches.length >= 2) return;
+      pinching = false;
+      pages.style.transform = '';
+      pages.style.transformOrigin = '';
+      if (Math.abs(ratio - 1) > 0.03) applyZoom(ratio, mid.x, mid.y);
     };
     const wheel = (e: WheelEvent) => {
       if (!e.ctrlKey) return;
       e.preventDefault();
-      if (g && g.d0 !== 0) return; // a touch pinch is in progress
-      if (!g) {
-        const r = sc.getBoundingClientRect();
-        if (!begin(e.clientX - r.left, e.clientY - r.top, 0, 'wheel')) return;
-      }
-      const cur = g!;
-      cur.ratio = clamp(cur.ratio * Math.exp(-e.deltaY * 0.01), ZMIN / cur.z0, ZMAX / cur.z0);
-      schedule();
-      if (wheelTimer) clearTimeout(wheelTimer);
-      wheelTimer = setTimeout(end, 140);
+      const r = sc.getBoundingClientRect();
+      applyZoom(Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top);
     };
-
     sc.addEventListener('touchstart', ts, { passive: true });
     sc.addEventListener('touchmove', tm, { passive: false });
     sc.addEventListener('touchend', te, { passive: true });
@@ -711,15 +535,8 @@ export function PdfView(props: PdfViewProps) {
       sc.removeEventListener('touchend', te);
       sc.removeEventListener('touchcancel', te);
       sc.removeEventListener('wheel', wheel);
-      if (raf) cancelAnimationFrame(raf);
-      if (wheelTimer) clearTimeout(wheelTimer);
-      g = null;
-      pages.style.transform = '';
-      pages.style.transformOrigin = '';
-      pages.style.willChange = '';
-      delete sc.dataset.pinch;
     };
-  }, [captureAnchor]);
+  }, [applyZoom]);
 
   /* ----- page resolution for links / outline ----- */
   const goToDest = useCallback(
@@ -855,7 +672,7 @@ export function PdfView(props: PdfViewProps) {
                 query={query}
                 onVisible={onVisible}
                 onGoToDest={goToDest}
-                onExternal={onExternalLink}
+                onExternal={(u) => P.current.onExternalLink(u)}
                 failedLabel={failedLabel}
               />
             ))

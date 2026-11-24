@@ -6,6 +6,7 @@ import type { BookRecord, LibraryFilter, LibrarySort, LibraryView } from '../lib
 import { BookCard, BookName, BookRow } from '../components/BookCard';
 import { ShelfItem } from '../components/ShelfViews';
 import { FilePicker, type FilePickerHandle } from '../components/FilePicker';
+import { FabMenu } from '../components/FabMenu';
 import { LogoMark } from '../components/Logo';
 import { Sheet } from '../components/Sheet';
 import { ShelfDialog } from '../components/ShelfDialog';
@@ -167,6 +168,12 @@ export function LibraryScreen() {
     <div className="screen">
       <div className="screen-pad">
         <FilePicker ref={picker} shelfId={shelf?.id} />
+        {!selecting && (books.length > 0 || shelves.length > 0 || !!shelf) && (
+          <FabMenu actions={[
+            { id: 'book', icon: BookPlus, label: t('fab.book'), onClick: () => picker.current?.open() },
+            ...(shelf ? [] : [{ id: 'shelf', icon: FolderPlus, label: t('fab.shelf'), onClick: () => setDialog('new') }]),
+          ]} />
+        )}
         <header className="page-head">
           {shelf ? (
             <div style={{ marginInline: -10, marginBottom: -6 }}>
@@ -185,19 +192,6 @@ export function LibraryScreen() {
               {shelf?.color && <i className="shelf-dot big" style={{ background: shelf.color }} aria-hidden="true" />}
               {shelf ? shelf.name : t('nav.library')}
             </h1>
-            <div className="row top-actions">
-              {!shelf && (books.length > 0 || shelves.length > 0) && (
-                <button className="icon-btn" onClick={() => setDialog('new')} aria-label={t('shelf.new')} title={t('shelf.new')}>
-                  <FolderPlus size={21} />
-                </button>
-              )}
-              {(books.length > 0 || shelf) && (
-                <button className="btn btn-sm" onClick={() => picker.current?.open()}>
-                  <Plus size={18} aria-hidden="true" />
-                  {t('library.add')}
-                </button>
-              )}
-            </div>
           </div>
           {shelf && (
             <div className="row" style={{ gap: 8 }}>

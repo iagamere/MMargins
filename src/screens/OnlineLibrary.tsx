@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, BookOpen, ChevronDown, Compass, ChevronUp, Pencil, Plus, Search, Settings2, Trash2, Upload, Users, Bell } from 'lucide-react';
+import { ArrowLeft, BookOpen, BookPlus, ChevronDown, ChevronUp, Cloud, Library, Pencil, PenLine, ShieldCheck, Settings2, Trash2, Upload } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useOnline } from '../store/useOnline';
-import { useSocial } from '../store/useSocial';
 import { useInbox } from '../store/useInbox';
 import { RemovedBooksNotice } from '../components/RemovedBooksNotice';
 import { useT } from '../lib/i18n';
@@ -17,7 +16,8 @@ import { Sheet } from '../components/Sheet';
 import { AddBooksSheet, BookSheet, ShelfBooksSheet, shelfModesOf } from '../components/OnlineBooks';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AccessBadge, AccessPicker, PasswordBlock, PublicConfirm, codeOf } from '../components/AccessControls';
-import { VisitSheet } from './Visit';
+import { FabMenu } from '../components/FabMenu';
+import { OnlineProfileCard } from '../components/OnlineProfileCard';
 
 type Pending = { to: ShelfAccess; run: () => void } | null;
 
@@ -177,9 +177,8 @@ export function OnlineLibraryScreen() {
   const profile = useOnline((s) => s.profile);
   const status = useOnline((s) => s.status);
   const connect = useOnline((s) => s.connect);
-  const incoming = useSocial((s) => s.rel?.incoming.length ?? 0);
-  useEffect(() => { if (profile) void useSocial.getState().load(); }, [profile]);
-  const unreadN = useInbox((s) => s.unread);
+  const account = useApp((s) => s.account);
+  const moderator = useInbox((s) => s.moderator === true);
   useEffect(() => { if (profile) void useInbox.getState().refresh(); }, [profile]);
 
   const [lib, setLib] = useState<OnlineLibrary | null>(null);
@@ -197,7 +196,6 @@ export function OnlineLibraryScreen() {
   const [editLib, setEditLib] = useState(false);
   const [editing, setEditing] = useState<OnlineShelf | 'new' | null>(null);
   const [deleting, setDeleting] = useState<OnlineShelf | null>(null);
-  const [visiting, setVisiting] = useState(false);
 
   const goBack = () => { if (!back()) navigate({ name: 'library' }, { replace: true }); };
 
@@ -271,21 +269,30 @@ export function OnlineLibraryScreen() {
     }
   };
 
-  let body;
-  if (!onlineConfigured) body = <p className="hint">{t('online.notConfigured')}</p>;
-  else if (status === 'idle' || status === 'connecting' || load === 'loading') body = <p className="hint" role="status">{t('online.connecting')}</p>;
-  else if (status === 'error' || load === 'error') {
-    body = (
-      <div className="acc-card">
-        <p className="acc-error" role="alert">{t(`online.err.${(status === 'error' ? useOnline.getState().error : fail) ?? 'unknown'}`)}</p>
-        <div className="acc-actions"><button className="btn btn-sm" onClick={() => (status === 'error' ? void connect() : void reload())}>{t('online.retry')}</button></div>
+  if (!account) {
+    return (
+      <div className="screen">
+        <div className="screen-pad" style={{ maxWidth: 720 }}>
+          <header className="page-head"><div className="top"><h1 className="h-display">{t('nav.me')}</h1></div></header>
+          <div className="acc-card">
+            <div className="acc-avatar big off" aria-hidden="true"><Cloud size={26} strokeWidth={1.6} /></div>
+            <div className="acc-text"><p className="hint">{t('home.signInHint')}</p></div>
+            <button className="btn btn-primary" onClick={() => navigate({ name: 'account' })}>{t('account.signInBtn')}</button>
+          </div>
+        </div>
       </div>
     );
-  } else if (!profile) {
+  }
+
+  let body;
+  if (!onlineConfigured) body = <p className="hint">{t('online.notConfigured')}</p>;
+  else if (!profile || status !== 'ready') body = null; // the profile card above shows connecting / error / "create your profile"
+  else if (load === 'loading') body = <p className="hint" role="status">{t('online.connecting')}</p>;
+  else if (load === 'error') {
     body = (
       <div className="acc-card">
-        <p className="hint">{t('onlineLib.noProfile')}</p>
-        <div className="acc-actions"><button className="btn btn-sm" onClick={() => navigate({ name: 'account' })}>{t('online.title')}</button></div>
+        <p className="acc-error" role="alert">{t(`online.err.${fail ?? 'unknown'}`)}</p>
+        <div className="acc-actions"><button className="btn btn-sm" onClick={() => void reload()}>{t('online.retry')}</button></div>
       </div>
     );
   } else if (lib) {
@@ -302,7 +309,6 @@ export function OnlineLibraryScreen() {
 
         <div className="olib-head">
           <h2>{t('onlineLib.shelves')}</h2>
-          <button className="btn btn-sm btn-primary" onClick={() => setEditing('new')}><Plus size={16} aria-hidden="true" />{t('onlineLib.newShelf')}</button>
         </div>
         {shelves.length === 0 ? (
           <p className="hint">{t('onlineLib.noShelves')}</p>
@@ -329,7 +335,6 @@ export function OnlineLibraryScreen() {
 
         <div className="olib-head">
           <h2>{t('onlineBooks.title')}</h2>
-          <button className="btn btn-sm btn-primary" onClick={() => setAddingBooks(true)}><Plus size={16} aria-hidden="true" />{t('onlineBooks.addBtn')}</button>
         </div>
         {waiting.length > 1 && <div className="acc-actions" style={{ marginBottom: 10 }}><button className="btn btn-sm" onClick={() => void uploadAll()}><Upload size={16} aria-hidden="true" />{t('onlineBooks.uploadAll', { count: waiting.length })}</button></div>}
         <p className="hint">{t('onlineBooks.visibilityNote')}</p>
@@ -361,6 +366,12 @@ export function OnlineLibraryScreen() {
           </ul>
         )}
 
+        <FabMenu actions={[
+          { id: 'book', icon: BookPlus, label: t('fab.book'), onClick: () => setAddingBooks(true) },
+          { id: 'shelf', icon: Library, label: t('fab.shelf'), onClick: () => setEditing('new') },
+          { id: 'post', icon: PenLine, label: t('fab.postSoon'), onClick: () => undefined, disabled: true },
+        ]} />
+
         {addingBooks && <AddBooksSheet onClose={() => setAddingBooks(false)} onAdded={(b) => setBooks((all) => [b, ...all.filter((x) => x.id !== b.id)])} />}
         {editBook && <BookSheet book={editBook} lib={lib} shelves={shelves} links={links} onClose={() => setEditBook(null)} onSaved={(n) => setBooks((all) => all.map((x) => (x.id === n.id ? n : x)))} onDeleted={(id) => { setBooks((all) => all.filter((x) => x.id !== id)); setLinks((all) => all.filter((l) => l.book_id !== id)); }} />}
         {shelfBooks && <ShelfBooksSheet shelf={shelfBooks} books={books} links={links} onClose={() => setShelfBooks(null)} onLinks={setLinks} />}
@@ -386,16 +397,11 @@ export function OnlineLibraryScreen() {
   return (
     <div className="screen">
       <div className="screen-pad" style={{ maxWidth: 720 }}>
-        <header className="page-head">
-          <div style={{ marginInline: -10, marginBottom: -6 }}>
-            <button className="icon-btn" onClick={goBack} aria-label={t('common.back')}><ArrowLeft className="flip" size={22} /></button>
-          </div>
-          <h1>{t('onlineLib.title')}</h1>
-        </header>
-        {onlineConfigured && <div className="acc-actions" style={{ marginBottom: 6 }}><button className="btn btn-sm" onClick={() => setVisiting(true)}><Search size={16} aria-hidden="true" />{t('visit.open')}</button><button className="btn btn-sm" onClick={() => navigate({ name: 'discover' })}><Compass size={16} aria-hidden="true" />{t('discover.open')}</button><button className="btn btn-sm" onClick={() => navigate({ name: 'people' })}><Users size={16} aria-hidden="true" />{t('people.open')}{incoming > 0 && <span className="count-dot" aria-label={String(incoming)}>{incoming}</span>}</button><button className="btn btn-sm" onClick={() => navigate({ name: 'notifications' })}><Bell size={16} aria-hidden="true" />{t('notif.open')}{unreadN > 0 && <span className="count-dot" aria-label={String(unreadN)}>{unreadN}</span>}</button></div>}
+        <header className="page-head"><div className="top"><h1 className="h-display">{t('nav.me')}</h1></div></header>
+        {onlineConfigured && <OnlineProfileCard />}
+        {onlineConfigured && moderator && <div className="acc-actions" style={{ marginBottom: 6 }}><button className="btn btn-sm" onClick={() => navigate({ name: 'moderation' })}><ShieldCheck size={16} aria-hidden="true" />{t('mod.open')}</button></div>}
         {onlineConfigured && profile && <RemovedBooksNotice />}
         {body}
-        {visiting && <VisitSheet onClose={() => setVisiting(false)} />}
       </div>
     </div>
   );

@@ -84,7 +84,7 @@ export function SettingsScreen() {
         <TypographyControls />
         <p className="muted" style={{ fontSize: 13, marginTop: 10 }}>{t('settings.readingHint')}</p>
 
-        {isNative && (
+        {(
           <>
             <h2 className="eyebrow section-title">{t('account.title')}</h2>
             <div className="group">

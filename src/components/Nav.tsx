@@ -1,33 +1,47 @@
-import { BookOpen, Globe, Library, Settings as Cog, UserRound } from 'lucide-react';
+import { BookOpen, House, Library, Settings as Cog, UserRound, type LucideIcon } from 'lucide-react';
 import { useApp } from '../store/useApp';
 import { useT } from '../lib/i18n';
 import { isNative } from '../lib/platform';
 import { LogoMark } from './Logo';
 
+/** Order on the phone, left to right: On device · Continue · [Home] · Account · Settings. */
 const items = [
   { name: 'library', icon: Library, label: 'nav.library' },
   { name: 'continue', icon: BookOpen, label: 'nav.continue' },
+  { name: 'home', icon: House, label: 'nav.home' },
+  { name: 'onlineLibrary', icon: UserRound, label: 'nav.me' },
   { name: 'settings', icon: Cog, label: 'nav.settings' },
 ] as const;
 
+/** Which tab a route belongs to. */
 function active(route: string) {
-  return route === 'details' ? 'library' : route === 'visit' || route === 'discover' || route === 'people' || route === 'notifications' || route === 'moderation' ? 'onlineLibrary' : route;
+  switch (route) {
+    case 'details':
+      return 'library';
+    case 'discover':
+    case 'visit':
+      return 'home';
+    case 'people':
+    case 'notifications':
+    case 'moderation':
+      return 'onlineLibrary';
+    case 'account':
+      return 'settings';
+    default:
+      return route;
+  }
 }
 
-/** Account circle: sits in the middle of the bottom bar and rises above it. Initial of the signed-in user + a sync dot (green = in sync, pulsing = moving books). */
-function AccountFab() {
+/** Home circle: sits in the middle of the bottom bar and rises above it. Opens the online side (libraries, discovery). */
+function HomeFab() {
   const { t } = useT();
-  const account = useApp((s) => s.account);
   const route = useApp((s) => s.route);
-  const busy = useApp((s) => s.syncing || Object.keys(s.transfers).length > 0);
   const navigate = useApp((s) => s.navigate);
-  const initial = account ? (account.name || account.email || '?').trim().charAt(0).toUpperCase() : '';
-  const label = account ? `${t('account.title')}: ${account.name || account.email}` : t('account.signIn');
+  const label = t('nav.home');
   return (
     <div className="nav-fab-slot">
-      <button className="nav-fab" aria-current={route.name === 'account' ? 'page' : undefined} onClick={() => navigate({ name: 'account' })} aria-label={label} title={label}>
-        <span className={'acc-avatar' + (account ? '' : ' off')} aria-hidden="true">{account ? initial : <UserRound size={22} strokeWidth={1.8} />}</span>
-        {account && <i className={'acc-dot' + (busy ? ' busy' : '')} aria-hidden="true" />}
+      <button className="nav-fab" aria-current={active(route.name) === 'home' ? 'page' : undefined} onClick={() => navigate({ name: 'home' }, { replace: true })} aria-label={label} title={label}>
+        <span className="acc-avatar" aria-hidden="true"><House size={22} strokeWidth={1.8} /></span>
       </button>
     </div>
   );
@@ -36,24 +50,27 @@ function AccountFab() {
 export function BottomNav() {
   const route = useApp((s) => s.route);
   const account = useApp((s) => s.account);
+  const busy = useApp((s) => s.syncing || Object.keys(s.transfers).length > 0);
   const navigate = useApp((s) => s.navigate);
   const { t } = useT();
   const go = (name: string) => navigate({ name } as any, { replace: true });
-  const item = (name: string, Icon: typeof Library, label: string, target = name) => (
-    <button key={name} className="nav-item" aria-current={active(route.name) === name ? 'page' : undefined} onClick={() => go(target)}>
+  const item = (name: string, Icon: LucideIcon, label: string) => (
+    <button key={name} className="nav-item" aria-current={active(route.name) === name ? 'page' : undefined} onClick={() => go(name)}>
       <Icon size={22} aria-hidden="true" />
       <span>{t(label)}</span>
+      {/* signed in: green dot on Settings (pulses while books are syncing) */}
+      {name === 'settings' && account && <i className={'nav-dot' + (busy ? ' busy' : '')} aria-hidden="true" />}
     </button>
   );
-  // on the phone app: two tabs, the account circle, two tabs (balanced around the circle)
+  // on the phone app: two tabs, the Home circle, two tabs (balanced around the circle)
   if (isNative) {
     return (
       <nav className="nav has-fab" aria-label={t('nav.main')}>
         {item('library', Library, 'nav.library')}
         {item('continue', BookOpen, 'nav.continue')}
-        <AccountFab />
+        <HomeFab />
+        {item('onlineLibrary', UserRound, 'nav.me')}
         {item('settings', Cog, 'nav.settings')}
-        {item('onlineLibrary', Globe, 'nav.online', account ? 'onlineLibrary' : 'account')}
       </nav>
     );
   }

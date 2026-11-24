@@ -141,6 +141,7 @@ export interface Settings {
 
 export type Route =
   | { name: 'library' }
+  | { name: 'home' }
   | { name: 'continue' }
   | { name: 'settings' }
   | { name: 'account' }
