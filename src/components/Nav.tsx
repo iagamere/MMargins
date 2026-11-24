@@ -58,8 +58,8 @@ export function BottomNav() {
     <button key={name} className="nav-item" aria-current={active(route.name) === name ? 'page' : undefined} onClick={() => go(name)}>
       <Icon size={22} aria-hidden="true" />
       <span>{t(label)}</span>
-      {/* signed in: green dot on Settings (pulses while books are syncing) */}
-      {name === 'settings' && account && <i className={'nav-dot' + (busy ? ' busy' : '')} aria-hidden="true" />}
+      {/* signed in: green dot on Account (pulses while books are syncing) */}
+      {name === 'onlineLibrary' && account && <i className={'nav-dot' + (busy ? ' busy' : '')} aria-hidden="true" />}
     </button>
   );
   // on the phone app: two tabs, the Home circle, two tabs (balanced around the circle)
