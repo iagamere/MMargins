@@ -78,7 +78,10 @@ interface SlotProps {
   lib: any;
   num: number;
   size: Size;
+  /** scale of the page box in the layout (changes at once while zooming) */
   cssScale: number;
+  /** scale the canvas is drawn at (follows cssScale after the zoom settles; the layers are stretched by CSS in between) */
+  renderScale: number;
   registry: Registry;
   adapt: 'none' | 'dark' | 'sepia';
   query: string;
@@ -89,7 +92,7 @@ interface SlotProps {
 }
 
 const PageSlot = memo(function PageSlot(p: SlotProps) {
-  const { doc, lib, num, size, cssScale, registry, onVisible } = p;
+  const { doc, lib, num, size, cssScale, renderScale, registry, onVisible } = p;
   const slot = useRef<HTMLDivElement>(null);
   const canvasHost = useRef<HTMLDivElement>(null);
   const textHost = useRef<HTMLDivElement>(null);
@@ -128,13 +131,13 @@ const PageSlot = memo(function PageSlot(p: SlotProps) {
         if (cancelled) return;
         const page = await doc.getPage(num);
         if (cancelled) return;
-        const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
         let out = dpr;
-        const base = page.getViewport({ scale: cssScale });
-        // cap very large canvases (memory on phones)
-        const maxPx = 14_000_000;
+        const base = page.getViewport({ scale: renderScale });
+        // cap very large canvases: drawing runs on the main thread, so huge ones make zooming stutter
+        const maxPx = 8_000_000;
         if (base.width * base.height * out * out > maxPx) out = Math.sqrt(maxPx / (base.width * base.height));
-        const viewport = page.getViewport({ scale: cssScale * out });
+        const viewport = page.getViewport({ scale: renderScale * out });
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.floor(viewport.width));
         canvas.height = Math.max(1, Math.floor(viewport.height));
@@ -156,9 +159,9 @@ const PageSlot = memo(function PageSlot(p: SlotProps) {
 
         // selectable text
         th.replaceChildren();
-        slot.current?.style.setProperty('--scale-factor', String(cssScale));
+        slot.current?.style.setProperty('--scale-factor', String(renderScale));
         slot.current?.style.setProperty('--user-unit', '1');
-        slot.current?.style.setProperty('--total-scale-factor', String(cssScale));
+        slot.current?.style.setProperty('--total-scale-factor', String(renderScale));
         try {
           textLayer = new lib.TextLayer({ textContentSource: page.streamTextContent(), container: th, viewport: base });
           await textLayer.render();
@@ -209,7 +212,7 @@ const PageSlot = memo(function PageSlot(p: SlotProps) {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [near, cssScale, doc, num]);
+  }, [near, renderScale, doc, num]);
 
   // re-mark search hits when the query changes without a re-render of the page
   useEffect(() => {
@@ -223,9 +226,22 @@ const PageSlot = memo(function PageSlot(p: SlotProps) {
       data-page={num}
       style={{ width: size.w * cssScale, height: size.h * cssScale }}
     >
-      <div ref={canvasHost} style={{ position: 'absolute', inset: 0 }} />
-      <div ref={textHost} className="textLayer" />
-      <div ref={linkHost} style={{ position: 'absolute', inset: 0 }} />
+      <div
+        className="pdf-layers"
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: size.w * renderScale,
+          height: size.h * renderScale,
+          transformOrigin: '0 0',
+          transform: Math.abs(cssScale / renderScale - 1) < 1e-4 ? undefined : `scale(${cssScale / renderScale})`,
+        }}
+      >
+        <div ref={canvasHost} style={{ position: 'absolute', inset: 0 }} />
+        <div ref={textHost} className="textLayer" />
+        <div ref={linkHost} style={{ position: 'absolute', inset: 0 }} />
+      </div>
       {failed && <div className="ph">{p.failedLabel}</div>}
     </div>
   );
@@ -359,6 +375,16 @@ export function PdfView(props: PdfViewProps) {
     const byPage = Math.min(byWidth, (box.h - insetsV - topPad) / s0.h);
     return Math.max(0.1, (fit === 'width' ? byWidth : byPage) * zoom);
   }, [sizes, box.w, box.h, fit, zoom, sidePad]);
+
+  // Pages are re-drawn only after the zoom has settled; until then the old picture is just stretched (instant, no stutter).
+  const [renderScale, setRenderScale] = useState(0);
+  useEffect(() => {
+    if (!cssScale) return;
+    if (!renderScale) return setRenderScale(cssScale);
+    const id = window.setTimeout(() => setRenderScale(cssScale), 220);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cssScale]);
 
   const prevScale = useRef(0);
   useLayoutEffect(() => {
@@ -498,6 +524,7 @@ export function PdfView(props: PdfViewProps) {
     const ts = (e: TouchEvent) => {
       if (e.touches.length === 2) {
         pinching = true;
+        pages.style.willChange = 'transform';
         startDist = dist(e);
         ratio = 1;
         const r = sc.getBoundingClientRect();
@@ -516,6 +543,7 @@ export function PdfView(props: PdfViewProps) {
       pinching = false;
       pages.style.transform = '';
       pages.style.transformOrigin = '';
+      pages.style.willChange = '';
       if (Math.abs(ratio - 1) > 0.03) applyZoom(ratio, mid.x, mid.y);
     };
     const wheel = (e: WheelEvent) => {
@@ -667,6 +695,7 @@ export function PdfView(props: PdfViewProps) {
                 num={i + 1}
                 size={s}
                 cssScale={cssScale}
+                renderScale={renderScale || cssScale}
                 registry={registry}
                 adapt={adapt}
                 query={query}

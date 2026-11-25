@@ -17,7 +17,19 @@ const LTR_RE = /[A-Za-zÀ-ɏͰ-ϿЀ-ӿ]/g;
 /** Arabic combining marks (harakat, shadda, sukun, tanwin, dagger alef, Quranic signs). */
 const MARK_ONLY = /^[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7\u06E8\u06EA-\u06ED\u08D3-\u08FF]+$/;
 const TERMINATOR = /[.!?؟…:;"”»)\]’']\s*$/;
-
+/** Does this line open a new list entry / table-of-contents entry? ("الفصل 3: ..", "الفصل الخامس: ..", "Chapter 4", "1) ..", "• ..")
+    Deliberately strict: a wrapped line of ordinary prose may start with "part of" or "الفصل بين", which must NOT split a paragraph. */
+const LABEL_WORDS = /^(?:الفصل|فصل|الباب|باب|الجزء|جزء|الملحق|ملحق|chapter|chap\.|part|section|volume|vol\.|chapitre|partie|livre|tome)(?=[\s:：.\-–—]|$)/i;
+const ORDINAL = /^(?:ال)?(?:أول|اول|ثاني|ثالث|رابع|خامس|سادس|سابع|ثامن|تاسع|عاشر|حادي|أخير|اخير|إضافي|اضافي|تمهيدي|ختامي)|^(?:[0-9٠-٩]+|[ivx]{1,5})(?=[\s:：.)\-–—]|$)|^(?:one|two|three|four|five|six|seven|eight|nine|ten|first|second|third|premier|deuxième)\b/i;
+function opensEntry(text: string): boolean {
+  const t = text.trim();
+  if (/^[•●▪◦■□▶►‣·*]\s/.test(t) || /^[–—-]\s\S/.test(t)) return true;               // bullets
+  if (/^[0-9٠-٩]{1,4}\s*[.:)]\s*\S/.test(t)) return true;                              // "1) ..", "2. .."
+  const m = LABEL_WORDS.exec(t);
+  if (!m) return false;
+  const rest = t.slice(m[0].length).replace(/^[\s:：.\-–—]+/, '');
+  return /^[:：]/.test(t.slice(m[0].length).trim()) || ORDINAL.test(rest) || /^\S+(?:\s+\S+){0,3}\s*[:：]/.test(rest);
+}
 interface Frag { s: string; x: number; y: number; w: number; h: number }
 interface Line { y: number; h: number; x0: number; x1: number; text: string; rtl: boolean }
 
@@ -139,12 +151,30 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   const colW = Math.max(1, colRight - colLeft);
   const isHead = (l: Line) => l.h > body * 1.22 && l.text.length < 140;
 
+  /* A run of 3+ consecutive short lines (table of contents, lists, verse, addresses) is never one paragraph:
+     ordinary prose does not wrap into several lines that are all far shorter than the column. */
+  const widthOf = (l: Line) => l.x1 - l.x0;
+  const isShortLine = (l: Line) => widthOf(l) < colW * 0.85 && l.text.length < 70;
+  const inShortRun = new Array<boolean>(kept.length).fill(false);
+  for (let i = 0; i < kept.length; ) {
+    if (!isShortLine(kept[i])) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < kept.length && isShortLine(kept[j + 1]) && kept[j].y - kept[j + 1].y < typical * 1.55) j++;
+    if (j - i + 1 >= 3) for (let k = i; k <= j; k++) inShortRun[k] = true;
+    i = j + 1;
+  }
+
   /* ---- lines → paragraphs ---- */
   type Raw = { text: string; head: boolean };
   const raws: Raw[] = [];
   let cur: Raw | null = null;
   let prev: Line | null = null;
-  for (const l of kept) {
+  let prevIdx = -1;
+  for (let idx = 0; idx < kept.length; idx++) {
+    const l = kept[idx];
     const head = isHead(l);
     let startNew = !cur || !prev;
     if (!startNew && prev && cur) {
@@ -152,7 +182,9 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
       const bigGap = prev.y - l.y > typical * 1.55;
       const short = (prev.x1 - prev.x0) < colW * 0.8;
       const indent = l.rtl ? colRight - l.x1 > body * 0.8 : l.x0 - colLeft > body * 0.8;
-      startNew = head !== cur.head || bigGap || (ended && (short || indent));
+      const listy = inShortRun[idx] && inShortRun[prevIdx];       // both lines belong to the same list-like run
+      const item = opensEntry(l.text) && !/-$/.test(prev.text); // this line opens a new entry
+      startNew = head !== cur.head || bigGap || (ended && (short || indent)) || listy || item;
     }
     if (startNew) {
       cur = { text: l.text, head };
@@ -162,6 +194,7 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
       else cur.text += ' ' + l.text;
     }
     prev = l;
+    prevIdx = idx;
   }
 
   const paras: Para[] = raws
