@@ -21,6 +21,28 @@ const AR_LETTER = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\
 const LATIN_LETTER = /[A-Za-z]/;
 const STRETCH_ONLY = /^\s*[t\uFFFD\uE000-\uF8FF\u0640]+\s*$/;
 
+/** Many Arabic PDF fonts map their glyphs to the old "presentation form" code points (U+FB50–FDFF, U+FE70–FEFF) instead of the
+    real letters. Phones' fonts usually lack those code points, so harakat / tanween come out as empty boxes ("أخير▯ا") and
+    isolated forms break words. Map them back to the real characters (harakat, with or without a kashida, become the plain mark). */
+const PRES_MARKS: Record<string, string> = {
+  '\uFE70': '\u064B', '\uFE71': '\u064B', '\uFE72': '\u064C', '\uFE73': '', '\uFE74': '\u064D', '\uFE76': '\u064E', '\uFE77': '\u064E',
+  '\uFE78': '\u064F', '\uFE79': '\u064F', '\uFE7A': '\u0650', '\uFE7B': '\u0650', '\uFE7C': '\u0651', '\uFE7D': '\u0651', '\uFE7E': '\u0652', '\uFE7F': '\u0652',
+};
+function letterWeight(c: string): number {
+  if (/[اأإآدذرزوؤءةى]/.test(c)) return 0.55;
+  if (/[سشصض]/.test(c)) return 1.7;
+  if (/[ \u00A0]/.test(c)) return 0.4;
+  if (/[ilIj.,;:'|!]/.test(c)) return 0.45;
+  if (/[mwMW]/.test(c)) return 1.5;
+  return 1;
+}
+export function fixArabicForms(s: string): string {
+  if (!/[\uFB50-\uFDFF\uFE70-\uFEFF]/.test(s)) return s;
+  return s
+    .replace(/[\uFE70-\uFE7F]/g, (c) => PRES_MARKS[c] ?? '')
+    .replace(/[\uFB50-\uFDFF\uFE80-\uFEFF]+/g, (m) => m.normalize('NFKC'));   // letters, lam-alef, "الله", ...
+}
+
 /** Justified Arabic text is stretched with kashida ("ـ"). Some PDF fonts map that glyph to the Latin letter "t" (or to nothing),
     so the text comes out as "بttدايات" or "متجtt ر". This removes such junk when it touches Arabic letters, and reports whether
     it sat at the start / end of the string (the stretch joins the neighbouring letters: no word space there). */
@@ -50,7 +72,7 @@ export function itemsToText(items: any[]): string {
   let out = '';
   let glue = false;
   for (const it of items) {
-    const raw: string = it?.str ?? '';
+    const raw: string = fixArabicForms(it?.str ?? '');
     if (STRETCH_ONLY.test(raw) && AR_LETTER.test(out.slice(-1))) {
       glue = true;
       continue;
@@ -96,7 +118,7 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
     if (typeof it.str !== 'string' || !it.str.trim()) continue;
     const t = it.transform as number[];
     const h = Math.hypot(t[2], t[3]) || it.height || 10;
-    frags.push({ s: it.str, x: t[4], y: t[5], w: it.width ?? 0, h });
+    frags.push({ s: fixArabicForms(it.str), x: t[4], y: t[5], w: it.width ?? 0, h });
   }
   if (!frags.length) return { paras: [], chars: 0, endsOpen: false };
 
@@ -151,9 +173,21 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
           const rtl = isRtl(best.s);
           const rel = Math.min(1, Math.max(0, rtl ? (best.x + best.w - cx) / best.w : (cx - best.x) / best.w));
           // insert after the letter under the mark (skipping marks already present)
-          let idx = Math.min(len - 1, Math.floor(rel * len));
-          while (idx < len - 1 && MARK_ONLY.test(best.s[idx])) idx++;
-          best.s = best.s.slice(0, idx + 1) + mark + best.s.slice(idx + 1);
+          // letters have very different widths (ا ر و are narrow, س ش ص wide, spaces too): weight by estimated width
+          // and ignore marks that are already attached, instead of assuming equal-width characters
+          const chars = [...best.s];
+          const wts = chars.map((c) => (MARK_ONLY.test(c) ? 0 : letterWeight(c)));
+          const total = wts.reduce((a, b) => a + b, 0) || 1;
+          // in RTL the text runs right-to-left, so `rel` already counts from the first (rightmost) character
+          let acc = 0;
+          let idx = chars.length - 1;
+          for (let i = 0; i < chars.length; i++) {
+            acc += wts[i];
+            if (acc / total >= rel - 1e-9 && wts[i] > 0) { idx = i; break; }
+          }
+          while (idx < chars.length - 1 && MARK_ONLY.test(chars[idx + 1])) idx++;
+          chars.splice(idx + 1, 0, mark);
+          best.s = chars.join('');
         }
       }
       frags.splice(0, frags.length, ...bases);
