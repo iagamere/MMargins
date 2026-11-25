@@ -3,6 +3,7 @@ import { useT } from '../lib/i18n';
 import { isPasswordError, loadPdfjs, openPdf, resolveOutlineDest, type OpenedPdf } from '../lib/pdf';
 import type { ErrorCode, ReaderApi, ReaderPosition, ReaderReadyInfo, SearchHit, Settings, ThemeName, TocItem } from '../lib/types';
 import { clamp, debounce, sleep, throttle } from '../lib/utils';
+import { itemsToText } from '../lib/reflow';
 
 export interface PdfViewProps {
   bookId: string;
@@ -626,7 +627,7 @@ export function PdfView(props: PdfViewProps) {
             try {
               const pg = await doc.getPage(i);
               const tc = await pg.getTextContent();
-              text = tc.items.map((it: any) => it.str + (it.hasEOL ? '\n' : '')).join(' ').replace(/\s+/g, ' ');
+              text = itemsToText(tc.items);
               pg.cleanup?.();
             } catch {
               text = '';

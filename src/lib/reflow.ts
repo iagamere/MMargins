@@ -17,6 +17,51 @@ const LTR_RE = /[A-Za-zÀ-ɏͰ-ϿЀ-ӿ]/g;
 /** Arabic combining marks (harakat, shadda, sukun, tanwin, dagger alef, Quranic signs). */
 const MARK_ONLY = /^[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7\u06E8\u06EA-\u06ED\u08D3-\u08FF]+$/;
 const TERMINATOR = /[.!?؟…:;"”»)\]’']\s*$/;
+const AR_LETTER = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const LATIN_LETTER = /[A-Za-z]/;
+const STRETCH_ONLY = /^\s*[t\uFFFD\uE000-\uF8FF\u0640]+\s*$/;
+
+/** Justified Arabic text is stretched with kashida ("ـ"). Some PDF fonts map that glyph to the Latin letter "t" (or to nothing),
+    so the text comes out as "بttدايات" or "متجtt ر". This removes such junk when it touches Arabic letters, and reports whether
+    it sat at the start / end of the string (the stretch joins the neighbouring letters: no word space there). */
+export function cleanStretch(raw: string): { s: string; before: boolean; after: boolean } {
+  let before = false;
+  let after = false;
+  if (!AR_LETTER.test(raw)) return { s: raw, before, after };
+  const s = raw.replace(/\u0640+|[t\uFFFD\uE000-\uF8FF]+/g, (m, off: number, str: string) => {
+    if (m[0] !== '\u0640') {
+      const prev = str[off - 1];
+      const next = str[off + m.length];
+      const arPrev = !!prev && AR_LETTER.test(prev);
+      const arNext = !!next && AR_LETTER.test(next);
+      const latPrev = !!prev && LATIN_LETTER.test(prev);
+      const latNext = !!next && LATIN_LETTER.test(next);
+      if (!((arPrev && !latNext) || (arNext && !latPrev))) return m;   // part of a real Latin word: keep
+    }
+    if (off === 0) before = true;
+    if (off + m.length === str.length) after = true;
+    return '';
+  });
+  return { s, before, after };
+}
+
+/** All text of a page's items as one string (for search), with the kashida junk removed and no false word breaks. */
+export function itemsToText(items: any[]): string {
+  let out = '';
+  let glue = false;
+  for (const it of items) {
+    const raw: string = it?.str ?? '';
+    if (STRETCH_ONLY.test(raw) && AR_LETTER.test(out.slice(-1))) {
+      glue = true;
+      continue;
+    }
+    const c = cleanStretch(raw);
+    out += (out && !glue && !c.before ? ' ' : '') + c.s + (it?.hasEOL ? '\n' : '');
+    glue = c.after;
+  }
+  return out.replace(/\s+/g, ' ');
+}
+
 /** Does this line open a new list entry / table-of-contents entry? ("الفصل 3: ..", "الفصل الخامس: ..", "Chapter 4", "1) ..", "• ..")
     Deliberately strict: a wrapped line of ordinary prose may start with "part of" or "الفصل بين", which must NOT split a paragraph. */
 const LABEL_WORDS = /^(?:الفصل|فصل|الباب|باب|الجزء|جزء|الملحق|ملحق|chapter|chap\.|part|section|volume|vol\.|chapitre|partie|livre|tome)(?=[\s:：.\-–—]|$)/i;
@@ -30,7 +75,7 @@ function opensEntry(text: string): boolean {
   const rest = t.slice(m[0].length).replace(/^[\s:：.\-–—]+/, '');
   return /^[:：]/.test(t.slice(m[0].length).trim()) || ORDINAL.test(rest) || /^\S+(?:\s+\S+){0,3}\s*[:：]/.test(rest);
 }
-interface Frag { s: string; x: number; y: number; w: number; h: number }
+interface Frag { s: string; x: number; y: number; w: number; h: number; kb?: boolean; ka?: boolean }
 interface Line { y: number; h: number; x0: number; x1: number; text: string; rtl: boolean }
 
 const isRtl = (s: string) => (s.match(RTL_RE)?.length ?? 0) > (s.match(LTR_RE)?.length ?? 0);
@@ -54,6 +99,28 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
     frags.push({ s: it.str, x: t[4], y: t[5], w: it.width ?? 0, h });
   }
   if (!frags.length) return { paras: [], chars: 0, endsOpen: false };
+
+  /* ---- remove kashida junk ("tt") that some fonts produce for the stretch of justified Arabic ---- */
+  {
+    const arabic = frags.filter((f) => AR_LETTER.test(f.s));
+    const nearArabic = (f: Frag) =>
+      arabic.some((a) => Math.abs(a.y - f.y) < 0.6 * Math.max(a.h, f.h) && f.x > a.x - 4 * a.h && f.x < a.x + a.w + 4 * a.h);
+    for (const f of frags) {
+      if (STRETCH_ONLY.test(f.s)) {
+        if (nearArabic(f)) {
+          f.s = '';
+          f.kb = f.ka = true;
+        }
+        continue;
+      }
+      const c = cleanStretch(f.s);
+      if (c.s !== f.s) {
+        f.s = c.s;
+        f.kb = c.before;
+        f.ka = c.after;
+      }
+    }
+  }
 
   /* ---- attach stand-alone diacritics to the letter they sit on ----
      Many PDFs draw harakat as separate glyphs placed above/below the letter. If they were treated as
@@ -115,7 +182,7 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
         const prev = gr[k - 1];
         const gap = rtl ? prev.x - (f.x + f.w) : f.x - (prev.x + prev.w);
         // Word gaps are ~0.25em; the gap after Arabic non-joining letters (ا د ذ ر ز و) is far smaller.
-        const word = gap > (rtl ? 0.24 : 0.17) * h;
+        const word = gap > (rtl ? 0.24 : 0.17) * h && !prev.ka && !f.kb;   // a kashida joins its neighbours: no word space
         if (word && !text.endsWith(' ') && !f.s.startsWith(' ') && !MARK_ONLY.test(f.s[0])) text += ' ';
       }
       text += f.s;

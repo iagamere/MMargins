@@ -60,6 +60,7 @@ export async function openPdf(data: Uint8Array): Promise<OpenedPdf> {
 }
 
 import { sleep } from './utils';
+import { itemsToText } from './reflow';
 import type { SearchHit } from './types';
 
 /** Plain-text search over a PDF's embedded text layer (no OCR). */
@@ -81,7 +82,7 @@ export async function searchPdf(
       try {
         const pg = await doc.getPage(i);
         const tc = await pg.getTextContent();
-        text = tc.items.map((it: any) => (it.str ?? '') + (it.hasEOL ? '\n' : '')).join(' ').replace(/\s+/g, ' ').normalize('NFKC');
+        text = itemsToText(tc.items).normalize('NFKC');
         pg.cleanup?.();
       } catch {
         text = '';
