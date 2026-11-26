@@ -36,7 +36,21 @@ function letterWeight(c: string): number {
   if (/[mwMW]/.test(c)) return 1.5;
   return 1;
 }
+/** Characters a phone font draws as an empty box: private-use area, the replacement char, geometric "missing glyph" squares,
+    and the Arabic Extended-A "open" tanween forms (U+08F0–08F2) that many fonts lack. */
+const TOFU = /[\uE000-\uF8FF\uFFFD\u25A0-\u25AF\u2610\u2395]/g;
+const AR = '\u0621-\u064A\u066E-\u06D3\u06FA-\u06FF';
 export function fixArabicForms(s: string): string {
+  if (/[\u08F0-\u08F2]/.test(s)) s = s.replace(/\u08F0/g, '\u064B').replace(/\u08F1/g, '\u064C').replace(/\u08F2/g, '\u064D');
+  if (TOFU.test(s)) {
+    TOFU.lastIndex = 0;
+    const onlyTofu = !s.replace(TOFU, '').trim();
+    // a lone box is a stand-alone mark; a box between an Arabic letter and a final alef is the tanween (عملًا، أخيرًا، مكتبيًا)
+    s = onlyTofu
+      ? s.replace(TOFU, '\u064B')
+      : s.replace(new RegExp(`(?<=[${AR}])${TOFU.source}+(?=\\u0627)`, 'g'), '\u064B').replace(TOFU, '');
+  }
+  TOFU.lastIndex = 0;
   if (!/[\uFB50-\uFDFF\uFE70-\uFEFF]/.test(s)) return s;
   return s
     .replace(/[\uFE70-\uFE7F]/g, (c) => PRES_MARKS[c] ?? '')
@@ -300,7 +314,9 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
 
   const paras: Para[] = raws
     .map((r) => {
-      const text = r.text.normalize('NFKC').replace(/\s+/g, ' ').trim();
+      // a fathatan always sits on the letter before the final alef (عملًا): put a misplaced one back
+      const text = r.text.normalize('NFKC').replace(/\s+/g, ' ').trim()
+        .replace(/\u064B([\u0621-\u0648\u064A]{1,8})\u0627(?![\u0621-\u064A])/g, '$1\u064B\u0627');
       return { text, kind: (r.head ? 'h' : 'p') as 'h' | 'p', rtl: isRtl(text) };
     })
     .filter((p) => p.text.length > 0);
