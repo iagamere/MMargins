@@ -320,6 +320,7 @@ const PageBlock = memo(function PageBlock(p: BlockProps) {
             <p key={i} dir={dirOf(para.rtl)} lang={para.rtl ? 'ar' : undefined} className={cls}><Highlighted text={para.text} q={p.query} /></p>
           );
         })}
+      {near && data?.odd && !showOrig && <div dir="ltr" style={{ fontSize: 11, opacity: 0.55, fontFamily: 'monospace', marginTop: 8 }}>diag: {data.odd}</div>}
       {showOrig && (
         <>
           <OriginalPage doc={doc} num={num} adapt={p.adapt} />

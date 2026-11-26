@@ -10,6 +10,8 @@ export interface PageText {
   paras: Para[];
   chars: number;
   endsOpen: boolean;
+  /** diagnostics: unusual code points found in the raw page text, e.g. "E001×3 064E×12" */
+  odd?: string;
 }
 
 const RTL_RE = /[֐-ࣿיִ-﷿ﹰ-﻿]/g;
@@ -126,6 +128,17 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   const vp = page.getViewport({ scale: 1 });
   const tc = await page.getTextContent();
   page.cleanup?.();
+
+  const oddCount = new Map<string, number>();
+  for (const it of tc.items as any[]) {
+    if (typeof it.str !== 'string') continue;
+    for (const ch of it.str) {
+      if (/[\u0020-\u007E\u00A0-\u00FF\u0621-\u064A\u066E-\u06D3\u2000-\u206F\u0660-\u0669\u060C\u061B\u061F\s]/.test(ch)) continue;
+      const k = ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0');
+      oddCount.set(k, (oddCount.get(k) ?? 0) + 1);
+    }
+  }
+  const odd = [...oddCount].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, n]) => `${k}×${n}`).join(' ') || undefined;
 
   const frags: Frag[] = [];
   for (const it of tc.items as any[]) {
@@ -326,5 +339,6 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
     paras,
     chars: paras.reduce((a, p) => a + p.text.length, 0),
     endsOpen: !!last && last.kind === 'p' && !TERMINATOR.test(last.text),
+    odd,
   };
 }
