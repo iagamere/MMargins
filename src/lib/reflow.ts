@@ -43,6 +43,8 @@ function letterWeight(c: string): number {
 const TOFU = /[\uE000-\uF8FF\uFFFD\u25A0-\u25AF\u2610\u2395]/g;
 const AR = '\u0621-\u064A\u066E-\u06D3\u06FA-\u06FF';
 export function fixArabicForms(s: string): string {
+  // C1 control characters (U+0080–009F) are how some justified-Arabic fonts encode their stretch glyphs: treat as kashida
+  if (/[\u0080-\u009F]/.test(s)) s = s.replace(/[\u0080-\u009F]+/g, '\u0640');
   if (/[\u08F0-\u08F2]/.test(s)) s = s.replace(/\u08F0/g, '\u064B').replace(/\u08F1/g, '\u064C').replace(/\u08F2/g, '\u064D');
   if (TOFU.test(s)) {
     TOFU.lastIndex = 0;
@@ -138,7 +140,13 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
       oddCount.set(k, (oddCount.get(k) ?? 0) + 1);
     }
   }
-  const odd = [...oddCount].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, n]) => `${k}×${n}`).join(' ') || undefined;
+  const oddList = [...oddCount].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([k, n]) => `${k}×${n}`).join(' ') || 'none';
+  // raw code points of the first few fragments around the words that show boxes (عم / أخير / مكتب)
+  const probe = (tc.items as any[]).filter((it) => typeof it.str === 'string' && /عم|أخير|مكتب|كنت|هند/.test(it.str)).slice(0, 4)
+    .map((it) => [...it.str].map((c: string) => c.codePointAt(0)!.toString(16).toUpperCase()).join('.')).join(' | ');
+  const markProbe = (tc.items as any[]).filter((it) => typeof it.str === 'string' && it.str.trim() && MARK_ONLY.test(it.str.trim())).slice(0, 5)
+    .map((it) => `${it.str.trim().codePointAt(0)!.toString(16).toUpperCase()}:w${(it.width ?? 0).toFixed(1)}/h${(Math.hypot(it.transform[2], it.transform[3]) || 0).toFixed(1)}`).join(' ');
+  const odd = `${oddList}${markProbe ? ' ## ' + markProbe : ''}${probe ? ' || ' + probe : ''}`;
 
   const frags: Frag[] = [];
   for (const it of tc.items as any[]) {
@@ -148,6 +156,10 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
     frags.push({ s: fixArabicForms(it.str), x: t[4], y: t[5], w: it.width ?? 0, h });
   }
   if (!frags.length) return { paras: [], chars: 0, endsOpen: false };
+
+  // Some PDFs encode justification stretch glyphs with the code points of harakat. Real marks are zero- or near-zero-width;
+  // a stand-alone "mark" that advances the pen is a stretch glyph, so it becomes a kashida for the cleanup below.
+  for (const f of frags) if (MARK_ONLY.test(f.s.trim()) && f.w > f.h * 0.12) f.s = '\u0640';
 
   /* ---- remove kashida junk ("tt") that some fonts produce for the stretch of justified Arabic ---- */
   {
