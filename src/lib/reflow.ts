@@ -43,8 +43,12 @@ function letterWeight(c: string): number {
 const TOFU = /[\uE000-\uF8FF\uFFFD\u25A0-\u25AF\u2610\u2395]/g;
 const AR = '\u0621-\u064A\u066E-\u06D3\u06FA-\u06FF';
 export function fixArabicForms(s: string): string {
-  // some fonts map the shadda glyph to a Latin "N" (كرNر): inside Arabic text it is the shadda
-  if (s.includes('N')) s = s.replace(new RegExp(`(?<=[${AR}])N(?=[${AR}])`, 'g'), '\u0651');
+  // This kind of font encodes some harakat glyphs as single capital Latin letters (تTكرSر، المص نNِّف، أTنتج). A lone capital that
+  // touches Arabic is such a glyph, not text: drop it (the original vowel mark is lost, which is harmless for reading).
+  if (/[A-Z]/.test(s) && /[\u0600-\u06FF]/.test(s)) {
+    const isAr = (c?: string) => !!c && /[\u0600-\u06FF\u0640]/.test(c);
+    s = s.replace(/(?<![A-Za-z0-9])[A-Z](?![A-Za-z0-9])/g, (m, off: number, all: string) => (isAr(all[off - 1]) || isAr(all[off + 1]) ? '' : m));
+  }
   // C1 control characters (U+0080–009F) are how some justified-Arabic fonts encode their stretch glyphs: treat as kashida
   if (/[\u0080-\u009F]/.test(s)) s = s.replace(/[\u0080-\u009F]+/g, '\u0640');
   if (/[\u08F0-\u08F2]/.test(s)) s = s.replace(/\u08F0/g, '\u064B').replace(/\u08F1/g, '\u064C').replace(/\u08F2/g, '\u064D');
@@ -169,7 +173,7 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   // has zero width ("ن" + ّ + ِ, w=0). It is a plain ن (optionally followed by ا): drop the marks and give it the width of a ن so the
   // gap to its neighbours is measured correctly (a zero width made a false word space before it).
   for (const f of frags) {
-    const m = f.s.trim().match(/^ن[\u064E\u0650\u0651]{1,3}(ا?)$/);
+    const m = f.s.replace(/\u0640/g, '').trim().match(/^ن[\u064E-\u0651]{1,4}(ا?)$/);
     if (m) { f.s = 'ن' + m[1]; f.w = Math.max(f.w, f.h * (m[1] ? 0.8 : 0.45)); }
   }
 
@@ -177,7 +181,7 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   {
     const ar = frags.filter((f) => AR_LETTER.test(f.s));
     for (const f of frags) {
-      if (/^\s*[VN]\s*$/.test(f.s) && ar.some((a) => Math.abs(a.y - f.y) < 0.6 * Math.max(a.h, f.h) && Math.abs(a.x - f.x) < 4 * a.h + a.w)) f.s = ' ';
+      if (/^\s*[A-Z]\s*$/.test(f.s) && f.w < f.h * 1.2 && ar.some((a) => Math.abs(a.y - f.y) < 0.6 * Math.max(a.h, f.h) && Math.abs(a.x - f.x) < 4 * a.h + a.w)) f.s = ' ';
     }
   }
 
@@ -361,7 +365,10 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
     .map((r) => {
       // a fathatan always sits on the letter before the final alef (عملًا): put a misplaced one back
       const text = r.text.normalize('NFKC').replace(/\s+/g, ' ').trim()
-        .replace(/\u064B([\u0621-\u0648\u064A]{1,8})\u0627(?![\u0621-\u064A])/g, '$1\u064B\u0627');
+        .replace(/\u064B([\u0621-\u0648\u064A]{1,8})\u0627(?![\u0621-\u064A])/g, '$1\u064B\u0627')
+        // an Arabic word glued to a Latin one (الدالةprint()، عبارةif): the PDF's gap between them is lost
+        .replace(/([\u0621-\u064A])(?=[A-Za-z])/g, '$1 ')
+        .replace(/([A-Za-z0-9)\]])(?=[\u0621-\u064A])/g, '$1 ');
       return { text, kind: (r.head ? 'h' : 'p') as 'h' | 'p', rtl: isRtl(text) };
     })
     .filter((p) => p.text.length > 0);
