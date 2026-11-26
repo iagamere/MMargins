@@ -4,7 +4,7 @@ import { useT } from '../lib/i18n';
 import { contentBox } from '../lib/trim';
 import { useApp } from '../store/useApp';
 import { convertOutline, isPasswordError, loadPdfjs, openPdf, resolveOutlineDest, searchPdf, type OpenedPdf } from '../lib/pdf';
-import { extractPage, type PageText } from '../lib/reflow';
+import { extractPage, scanPdfIssues, type PageText } from '../lib/reflow';
 import { resolveFont } from '../lib/readerCss';
 import type { AnnotationRecord, ErrorCode, PassageFocus, ReaderApi, ReaderPosition, ReaderReadyInfo, SearchHit, Settings, ThemeName } from '../lib/types';
 import { clamp, throttle } from '../lib/utils';
@@ -684,6 +684,7 @@ export function ReflowView(props: ReflowViewProps) {
         const around = hit.excerpt.replace(/^…|…$/g, '').replace(/\s+/g, ' ').trim();
         focusPassage(page, 0, { text: around, inner: q, color: '#d2a95f', hold: 3500 });
       },
+      scanText: async (onProgress, cancel) => (opened ? scanPdfIssues(opened.doc, onProgress, cancel) : ''),
       search: async (q, onHit, cancel) => {
         setQuery('');
         if (!opened) return { hasText: true };

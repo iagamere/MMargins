@@ -374,3 +374,88 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
     odd,
   };
 }
+
+
+/** Scans every page of a PDF and returns a plain-text report of everything that looks wrong in the extracted text
+    (unusual code points with real examples, and suspicious spots in the final reflowed text), to be copied to the developer. */
+export async function scanPdfIssues(
+  doc: any,
+  onProgress: (done: number, total: number) => void,
+  cancel: { cancelled: boolean },
+): Promise<string> {
+  const total: number = doc.numPages;
+  const hex = (str: string) => [...str].map((c) => c.codePointAt(0)!.toString(16).toUpperCase()).join('.');
+  const global = new Map<string, { n: number; pages: Set<number>; samples: string[] }>();
+  const pageLines: string[] = [];
+  const suspicious: string[] = [];
+  const SUSPECT: Array<[string, RegExp]> = [
+    ['Latin letter inside Arabic word', /[\u0621-\u064A][A-Za-z]|[A-Za-z][\u0621-\u064A]/],
+    ['box / replacement / private-use char', /[\uE000-\uF8FF\uFFFD\u25A0-\u25AF\u0080-\u009F]/],
+    ['mark after space or punctuation', /[\s.,،؛:!؟?(][\u064B-\u0652]/],
+    ['two different marks in a row', /[\u064B-\u0650][\u064B-\u0652]/],
+    ['single Arabic letter between spaces', /(?:^|\s)[\u0621-\u0640\u0642-\u064A](?=\s|$)/],
+    ['presentation-form code point left', /[\uFB50-\uFDFF\uFE70-\uFEFF]/],
+  ];
+  const suspCount = new Map<string, number>();
+  for (let n = 1; n <= total; n++) {
+    if (cancel.cancelled) break;
+    onProgress(n - 1, total);
+    try {
+      const page = await doc.getPage(n);
+      const tc = await page.getTextContent();
+      page.cleanup?.();
+      const pageOdd = new Map<string, number>();
+      for (const it of tc.items as any[]) {
+        if (typeof it.str !== 'string') continue;
+        for (const ch of it.str) {
+          if (/[\u0020-\u007E\u00A0-\u00FF\u0621-\u064A\u066E-\u06D3\u2000-\u206F\u0660-\u0669\u060C\u061B\u061F\s]/.test(ch)) continue;
+          const k = ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0');
+          pageOdd.set(k, (pageOdd.get(k) ?? 0) + 1);
+          let g = global.get(k);
+          if (!g) global.set(k, (g = { n: 0, pages: new Set(), samples: [] }));
+          g.n++;
+          g.pages.add(n);
+          if (g.samples.length < 4) {
+            g.samples.push(`p${n} "${it.str.length > 14 ? it.str.slice(0, 14) + '…' : it.str}" = ${hex(it.str.slice(0, 14))} w=${(it.width ?? 0).toFixed(1)} h=${(Math.hypot(it.transform[2], it.transform[3]) || 0).toFixed(1)}`);
+          }
+        }
+      }
+      if (pageOdd.size) pageLines.push(`p${n}: ${[...pageOdd].map(([k, c]) => `${k}x${c}`).join(' ')}`);
+      const res = await extractPage(doc, n);
+      for (const para of res.paras) {
+        for (const [label, re] of SUSPECT) {
+          const m = re.exec(para.text);
+          if (!m) continue;
+          suspCount.set(label, (suspCount.get(label) ?? 0) + 1);
+          if (suspicious.length < 400) {
+            const a = Math.max(0, m.index - 22);
+            suspicious.push(`p${n} [${label}] …${para.text.slice(a, m.index + 28)}…  (${hex(para.text.slice(m.index, m.index + 3))})`);
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      pageLines.push(`p${n}: ERROR ${(e as Error)?.message ?? e}`);
+    }
+  }
+  const out: string[] = [];
+  out.push(`MARGINS TEXT SCAN  pages=${total}${cancel.cancelled ? '  (stopped early)' : ''}`);
+  out.push('');
+  out.push('== UNUSUAL CODE POINTS (whole book) ==');
+  if (!global.size) out.push('none');
+  for (const [k, g] of [...global].sort((a, b) => b[1].n - a[1].n).slice(0, 60)) {
+    out.push(`${k}  count=${g.n}  pages=${g.pages.size}  e.g.`);
+    for (const sm of g.samples) out.push(`    ${sm}`);
+  }
+  out.push('');
+  out.push('== SUSPICIOUS SPOTS IN THE FINAL TEXT (counts) ==');
+  if (!suspCount.size) out.push('none');
+  for (const [k, c] of suspCount) out.push(`${k}: ${c}`);
+  out.push('');
+  out.push('== SUSPICIOUS SPOTS (first 400) ==');
+  out.push(...(suspicious.length ? suspicious : ['none']));
+  out.push('');
+  out.push('== PER PAGE UNUSUAL CODE POINTS (first 300 pages with any) ==');
+  out.push(...(pageLines.slice(0, 300).length ? pageLines.slice(0, 300) : ['none']));
+  return out.join('\n');
+}

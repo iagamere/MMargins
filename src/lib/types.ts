@@ -214,6 +214,8 @@ export interface ReaderApi {
   /** PDF only */
   goToPage?(page: number): void;
   zoomBy?(factor: number): void;
+  /** PDF text reflow: scan every page for text-extraction problems and return a plain-text report */
+  scanText?(onProgress: (done: number, total: number) => void, cancel: { cancelled: boolean }): Promise<string>;
   setFit?(mode: 'width' | 'page'): void;
 }
 

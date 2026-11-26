@@ -398,6 +398,69 @@ export function ThumbsPanel({ doc, total, current, onGo }: { doc: any; total: nu
 /* =========================================================
    Appearance panel (EPUB typography / PDF view options)
    ========================================================= */
+function TextScan({ api }: { api: ReaderApi }) {
+  const { t } = useT();
+  const [state, setState] = useState<{ done: number; total: number } | null>(null);
+  const [report, setReport] = useState('');
+  const [copied, setCopied] = useState(false);
+  const cancel = useRef({ cancelled: false });
+  useEffect(() => () => { cancel.current.cancelled = true; }, []);
+  const run = async () => {
+    cancel.current = { cancelled: false };
+    setReport('');
+    setState({ done: 0, total: 0 });
+    try {
+      const r = await api.scanText!((done, total) => setState({ done, total }), cancel.current);
+      setReport(r);
+    } finally {
+      setState(null);
+    }
+  };
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(report);
+      setCopied(true);
+    } catch {
+      const ta = document.getElementById('scan-report') as HTMLTextAreaElement | null;
+      ta?.select();
+      document.execCommand?.('copy');
+      setCopied(true);
+    }
+  };
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([report], { type: 'text/plain;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'margins-text-scan.txt';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  };
+  return (
+    <div className="setting">
+      <span className="label">{t('scan.title')}</span>
+      {state ? (
+        <div className="row">
+          <span style={{ flex: 1 }}>{t('scan.running')} {state.done}/{state.total || '…'}</span>
+          <button className="btn btn-sm" onClick={() => { cancel.current.cancelled = true; }}>{t('scan.stop')}</button>
+        </div>
+      ) : (
+        <button className="btn btn-sm" onClick={() => void run()}>{t('scan.run')}</button>
+      )}
+      {report && (
+        <>
+          <textarea id="scan-report" readOnly dir="ltr" value={report} rows={8} style={{ width: '100%', fontFamily: 'monospace', fontSize: 11 }} />
+          <div className="row">
+            <button className="btn btn-sm" style={{ flex: 1 }} onClick={() => void copy()}>{copied ? t('scan.copied') : t('scan.copy')}</button>
+            <button className="btn btn-sm" style={{ flex: 1 }} onClick={download}>{t('scan.download')}</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function PdfViewControls({ api }: { api: ReaderApi | null }) {
   const { t } = useT();
   const s = useApp((st) => st.settings);
@@ -414,6 +477,7 @@ export function PdfViewControls({ api }: { api: ReaderApi | null }) {
           {s.pdfReflow && (
             <div className="notice"><Info size={16} aria-hidden="true" /><span>{t('pdf.reflowNote')}</span></div>
           )}
+          {s.pdfReflow && api?.scanText && <TextScan api={api} />}
         </div>
         {!s.pdfReflow && (
           <>
