@@ -43,6 +43,8 @@ function letterWeight(c: string): number {
 const TOFU = /[\uE000-\uF8FF\uFFFD\u25A0-\u25AF\u2610\u2395]/g;
 const AR = '\u0621-\u064A\u066E-\u06D3\u06FA-\u06FF';
 export function fixArabicForms(s: string): string {
+  // some fonts map the shadda glyph to a Latin "N" (كرNر): inside Arabic text it is the shadda
+  if (s.includes('N')) s = s.replace(new RegExp(`(?<=[${AR}])N(?=[${AR}])`, 'g'), '\u0651');
   // C1 control characters (U+0080–009F) are how some justified-Arabic fonts encode their stretch glyphs: treat as kashida
   if (/[\u0080-\u009F]/.test(s)) s = s.replace(/[\u0080-\u009F]+/g, '\u0640');
   if (/[\u08F0-\u08F2]/.test(s)) s = s.replace(/\u08F0/g, '\u064B').replace(/\u08F1/g, '\u064C').replace(/\u08F2/g, '\u064D');
@@ -146,7 +148,9 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
     .map((it) => [...it.str].map((c: string) => c.codePointAt(0)!.toString(16).toUpperCase()).join('.')).join(' | ');
   const markProbe = (tc.items as any[]).filter((it) => typeof it.str === 'string' && it.str.trim() && MARK_ONLY.test(it.str.trim())).slice(0, 5)
     .map((it) => `${it.str.trim().codePointAt(0)!.toString(16).toUpperCase()}:w${(it.width ?? 0).toFixed(1)}/h${(Math.hypot(it.transform[2], it.transform[3]) || 0).toFixed(1)}`).join(' ');
-  const odd = `${oddList}${markProbe ? ' ## ' + markProbe : ''}${probe ? ' || ' + probe : ''}`;
+  const nunProbe = (tc.items as any[]).filter((it) => typeof it.str === 'string' && /ن[\u064E\u0650\u0651]|[\u064E\u0650\u0651]ن/.test(it.str)).slice(0, 4)
+    .map((it) => `${[...it.str].map((c: string) => c.codePointAt(0)!.toString(16).toUpperCase()).join('.')}:w${(it.width ?? 0).toFixed(1)}`).join(' ; ');
+  const odd = `${oddList}${nunProbe ? ' @@ ' + nunProbe : ''}${markProbe ? ' ## ' + markProbe : ''}${probe ? ' || ' + probe : ''}`;
 
   const frags: Frag[] = [];
   for (const it of tc.items as any[]) {
@@ -160,6 +164,21 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   // Some PDFs encode justification stretch glyphs with the code points of harakat. Real marks are zero- or near-zero-width;
   // a stand-alone "mark" that advances the pen is a stretch glyph, so it becomes a kashida for the cleanup below.
   for (const f of frags) if (MARK_ONLY.test(f.s.trim()) && f.w > f.h * 0.12) f.s = '\u0640';
+
+  // In this kind of PDF the dot of ن is a separate glyph whose code point is a fatha / kasra / shadda: a short fragment that is
+  // just "ن" plus such marks is a plain ن that belongs to the word around it (no word space, no invented mark).
+  for (const f of frags) {
+    const t = f.s.trim();
+    if (t.length <= 4 && /ن/.test(t) && /[\u064E\u0650\u0651]/.test(t) && !/[^ن\u064E\u0650\u0651]/.test(t)) { f.s = 'ن'; f.kb = true; f.ka = true; }
+  }
+
+  // a lone "V" / "N" between Arabic words is a glyph the font maps to a Latin letter, not text: drop it (keeps the word space)
+  {
+    const ar = frags.filter((f) => AR_LETTER.test(f.s));
+    for (const f of frags) {
+      if (/^\s*[VN]\s*$/.test(f.s) && ar.some((a) => Math.abs(a.y - f.y) < 0.6 * Math.max(a.h, f.h) && Math.abs(a.x - f.x) < 4 * a.h + a.w)) f.s = ' ';
+    }
+  }
 
   /* ---- remove kashida junk ("tt") that some fonts produce for the stretch of justified Arabic ---- */
   {
