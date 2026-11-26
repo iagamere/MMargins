@@ -1,6 +1,65 @@
 /* Turns a PDF page's positioned text fragments into readable paragraphs.
    This is a heuristic reconstruction: it is intentionally conservative and never touches OCR. */
 
+/** Word counts of a document, used to decide which side a stray letter belongs to ("أسر ع": is it أسر+ع or ع+next?). */
+export type Lexicon = Map<string, number>;
+const WORD_RE = /[\u0621-\u063A\u0641-\u064A]{3,}/g;
+const lexCache = new WeakMap<object, Promise<Lexicon>>();
+/** Builds (once per document) a vocabulary from ~150 evenly spread pages. */
+export function getLexicon(doc: any): Promise<Lexicon> {
+  let p = lexCache.get(doc);
+  if (!p) {
+    p = (async () => {
+      const lex: Lexicon = new Map();
+      const total: number = doc.numPages;
+      const step = Math.max(1, Math.floor(total / 150));
+      for (let n = 1; n <= total; n += step) {
+        try {
+          const page = await doc.getPage(n);
+          const tc = await page.getTextContent();
+          page.cleanup?.();
+          const txt = itemsToText(tc.items);
+          for (const w of txt.match(WORD_RE) ?? []) lex.set(w, (lex.get(w) ?? 0) + 1);
+        } catch { /* skip the page */ }
+      }
+      return lex;
+    })();
+    lexCache.set(doc, p);
+  }
+  return p;
+}
+
+/** A single Arabic letter (other than و) is never a word. Glue it (or a run of them) to the neighbour that makes the word the
+    document actually uses; "أ" before a word starting with ن is always the أن / أنه / أنواع split. */
+/** When the document has neither form: these letters are almost always word endings (ملف ا, أسر ع, يمكن ك), these word beginnings. */
+const PREV_LETTERS = 'اعغصحجفطضقكظخزذث';
+const NEXT_LETTERS = 'سأ';
+export function joinStrays(text: string, lex: Lexicon): string {
+  text = text.replace(/(^|\s)أ (?=ن)/g, '$1أ');
+  // the composite ن of this font sits inside its word even after a letter that does not connect (بر نامج، بيا نات): rejoin when the
+  // joined word is one the document really uses
+  text = text.replace(/(?<![\u0621-\u064A])([\u0621-\u064A]{1,5}[ادذرزو]) (ن[\u0621-\u064A]{1,8})(?![\u0621-\u064A])/g, (m, a: string, b: string) => ((lex.get(a + b) ?? 0) >= 2 ? a + b : m));
+  const toks = text.split(' ');
+  const isStray = (t: string) => t.length === 1 && /[\u0621-\u0647\u0649\u064A]/.test(t);
+  const isWord = (t?: string) => !!t && /^[\u0621-\u064A]+$/.test(t);
+  const out: string[] = [];
+  for (let i = 0; i < toks.length; i++) {
+    if (!isStray(toks[i])) { out.push(toks[i]); continue; }
+    let j = i, run = '';
+    while (j < toks.length && isStray(toks[j])) run += toks[j++];
+    const prev = out[out.length - 1];
+    const next = toks[j];
+    const cp = isWord(prev) ? lex.get(prev + run) ?? 0 : 0;
+    const cn = isWord(next) ? lex.get(run + next) ?? 0 : 0;
+    if (cp >= 2 && cp > cn) { out[out.length - 1] = prev + run; i = j - 1; }
+    else if (cn >= 2 && cn > cp) { toks[j] = run + next; i = j - 1; }
+    else if (cp === 0 && cn === 0 && isWord(prev) && run.length <= 2 && [...run].every((c) => PREV_LETTERS.includes(c))) { out[out.length - 1] = prev + run; i = j - 1; }
+    else if (cp === 0 && cn === 0 && isWord(next) && run.length <= 2 && NEXT_LETTERS.includes(run[0])) { toks[j] = run + next; i = j - 1; }
+    else out.push(...toks.slice(i, j)), i = j - 1;
+  }
+  return out.join(' ');
+}
+
 export interface Para {
   text: string;
   kind: 'p' | 'h';
@@ -165,6 +224,7 @@ const median = (a: number[]) => {
 };
 
 export async function extractPage(doc: any, num: number): Promise<PageText> {
+  const lex = await getLexicon(doc);
   const page = await doc.getPage(num);
   const vp = page.getViewport({ scale: 1 });
   const tc = await page.getTextContent();
@@ -191,11 +251,26 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   const odd = `${oddList}${nunProbe ? ' @@ ' + nunProbe : ''}${markProbe ? ' ## ' + markProbe : ''}${probe ? ' || ' + probe : ''}`;
 
   const frags: Frag[] = [];
+  // Whitespace-only items: a wide one is a real word space, a narrow one is only the font's spacing glyph inside a word.
+  const realSpaces: Array<{ x: number; y: number; w: number }> = [];
+  const nunXs: Array<{ x: number; y: number }> = [];   // zero-width composite ن glyphs: the space item next to one is that ن's advance, not a word space
   for (const it of tc.items as any[]) {
-    if (typeof it.str !== 'string' || !it.str.trim()) continue;
+    if (typeof it.str !== 'string') continue;
+    if (it.str && !it.str.trim()) {
+      const t = it.transform as number[];
+      const hh = Math.hypot(t[2], t[3]) || it.height || 10;
+      if ((it.width ?? 0) >= 0.4 * hh) realSpaces.push({ x: t[4], y: t[5], w: it.width });
+      continue;
+    }
+    if (NUN_COMPOSITE.test(it.str.trim()) && (it.width ?? 0) < 1) nunXs.push({ x: it.transform[4], y: it.transform[5] });
+    if (!it.str.trim()) continue;
     const t = it.transform as number[];
     const h = Math.hypot(t[2], t[3]) || it.height || 10;
     frags.push({ s: fixArabicForms(it.str), x: t[4], y: t[5], w: it.width ?? 0, h });
+  }
+  for (let i = realSpaces.length - 1; i >= 0; i--) {
+    const sp = realSpaces[i];
+    if (nunXs.some((n) => Math.abs(n.y - sp.y) < 3 && (Math.abs(n.x - sp.x) < 6 || Math.abs(n.x - (sp.x + sp.w)) < 6))) realSpaces.splice(i, 1);
   }
   if (!frags.length) return { paras: [], chars: 0, endsOpen: false };
 
@@ -211,11 +286,12 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
     if (m) { f.s = 'ن' + m[1]; f.nun = true; f.w = Math.max(f.w, f.h * (m[1] ? 0.8 : 0.45)); }
   }
 
-  // a lone "V" / "N" between Arabic words is a glyph the font maps to a Latin letter, not text: drop it (keeps the word space)
+  // a lone "V" / "N" between Arabic words is a glyph the font maps to a Latin letter, not text: drop it (the word space, if any,
+  // comes from the gap or from a real space item, never from this glyph)
   {
     const ar = frags.filter((f) => AR_LETTER.test(f.s));
     for (const f of frags) {
-      if (/^\s*[A-Z]\s*$/.test(f.s) && f.w < f.h * 1.2 && ar.some((a) => Math.abs(a.y - f.y) < 0.6 * Math.max(a.h, f.h) && Math.abs(a.x - f.x) < 4 * a.h + a.w)) f.s = ' ';
+      if (/^\s*[A-Z]\s*$/.test(f.s) && f.w < f.h * 1.2 && ar.some((a) => Math.abs(a.y - f.y) < 0.6 * Math.max(a.h, f.h) && Math.abs(a.x - f.x) < 4 * a.h + a.w)) f.s = '';
     }
   }
 
@@ -324,12 +400,13 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
       let hi = rtl ? prev.x : f.x;
       if (lo > hi) [lo, hi] = [hi, lo];
       const tol = 0.2 * h;
-      const stretched = stretches.some((st) => Math.abs(st.y - f.y) < 0.6 * h && st.x >= lo - tol && st.x <= hi + tol);
+      const realSpace = realSpaces.some((sp) => Math.abs(sp.y - f.y) < 0.6 * h && sp.x + sp.w > lo - tol && sp.x < hi + tol);
+      const stretched = !realSpace && stretches.some((st) => Math.abs(st.y - f.y) < 0.6 * h && st.x >= lo - tol && st.x <= hi + tol);
       gaps.push(gap);
       // Word gaps are ~0.25em; the gap after Arabic non-joining letters (ا د ذ ر ز و) is far smaller.
       // the composite ن sits inside its word: after a letter that connects forward there is no word space before it
       const nunJoin = !!f.nun && gap < 1.2 * h && FWD_JOIN.includes(prev.s.trim().slice(-1));
-      word.push(gap > (rtl ? 0.24 : 0.17) * h && !prev.ka && !f.kb && !stretched && !nunJoin);   // a kashida joins its neighbours: no word space
+      word.push(realSpace || (gap > (rtl ? 0.24 : 0.17) * h && !prev.ka && !f.kb && !stretched && !nunJoin));   // a kashida joins its neighbours: no word space
     }
     // 2) a single Arabic letter (not و) is never a word: it belongs to the neighbour it is closest to (justified lines widen the
     //    gaps inside words: "المرخ ص", "كر ر", "ت غ ير")
@@ -431,7 +508,7 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   const paras: Para[] = raws
     .map((r) => {
       // a fathatan always sits on the letter before the final alef (عملًا): put a misplaced one back
-      const text = (dotted ? cleanNunJunk(r.text.normalize('NFKC')) : r.text.normalize('NFKC')).replace(/\s+/g, ' ').trim()
+      const text = joinStrays((dotted ? cleanNunJunk(r.text.normalize('NFKC')) : r.text.normalize('NFKC')).replace(/\s+/g, ' ').trim(), lex)
         // "غيرً": the stretch glyph after ير is read as a tanween
         .replace(/(?<=\u064A\u0631)\u064B(?![\u0621-\u064A])/g, '')
         .replace(/\u064B([\u0621-\u0648\u064A]{1,8})\u0627(?![\u0621-\u064A])/g, '$1\u064B\u0627')
