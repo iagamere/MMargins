@@ -165,11 +165,12 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   // a stand-alone "mark" that advances the pen is a stretch glyph, so it becomes a kashida for the cleanup below.
   for (const f of frags) if (MARK_ONLY.test(f.s.trim()) && f.w > f.h * 0.12) f.s = '\u0640';
 
-  // In this kind of PDF the dot of ن is a separate glyph whose code point is a fatha / kasra / shadda: a short fragment that is
-  // just "ن" plus such marks is a plain ن that belongs to the word around it (no word space, no invented mark).
+  // In this kind of PDF the dot of ن is drawn by extra glyphs whose code points are a shadda / kasra / fatha, and the fragment
+  // has zero width ("ن" + ّ + ِ, w=0). It is a plain ن (optionally followed by ا): drop the marks and give it the width of a ن so the
+  // gap to its neighbours is measured correctly (a zero width made a false word space before it).
   for (const f of frags) {
-    const t = f.s.trim();
-    if (t.length <= 4 && /ن/.test(t) && /[\u064E\u0650\u0651]/.test(t) && !/[^ن\u064E\u0650\u0651]/.test(t)) { f.s = 'ن'; f.kb = true; f.ka = true; }
+    const m = f.s.trim().match(/^ن[\u064E\u0650\u0651]{1,3}(ا?)$/);
+    if (m) { f.s = 'ن' + m[1]; f.w = Math.max(f.w, f.h * (m[1] ? 0.8 : 0.45)); }
   }
 
   // a lone "V" / "N" between Arabic words is a glyph the font maps to a Latin letter, not text: drop it (keeps the word space)
