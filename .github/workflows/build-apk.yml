@@ -65,14 +65,7 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
-        # Maven Central sometimes answers 429 (too many requests) to shared CI runners: retry a few times before failing
-        run: |
-          for i in 1 2 3 4; do
-            ./gradlew assembleDebug --no-daemon && exit 0
-            echo "Build attempt $i failed; waiting before retry"
-            sleep $((i * 45))
-          done
-          exit 1
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: Rename APK
         run: |
