@@ -23,6 +23,37 @@ const AR_LETTER = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\
 const LATIN_LETTER = /[A-Za-z]/;
 const STRETCH_ONLY = /^\s*[t\uFFFD\uE000-\uF8FF\u0640]+\s*$/;
 
+/** Letters that connect to the NEXT letter (everything except ا د ذ ر ز و and their hamza / ة / ى variants). */
+const FWD_JOIN = '\u0628\u062A\u062B\u062C\u062D\u062E\u0633\u0634\u0635\u0636\u0637\u0638\u0639\u063A\u0641\u0642\u0643\u0644\u0645\u0646\u0647\u064A\u0626';
+/** A fragment that is exactly one Arabic letter (plus marks), other than و (which is a real one-letter word, "and"). */
+const STRAY_RE = /^[\u0621-\u0647\u0649\u064A][\u064B-\u0652]*$/;
+/** kasra+shadda in either order: in the "dotted nun" fonts this pair is the ن glyph's dot, never real vocalisation. */
+const NUN_JUNK = '(?:\u0650\u0651|\u0651\u0650)';
+const NUN_COMPOSITE = /^ن[A-Z]?[\u064B-\u0652\u0640\u0080-\u009F]+$/;
+
+/** Does this page use the font whose ن is a zero-width glyph made of marks ("نِّ", "نَ", "نNِّ")? */
+export function hasDottedNun(items: any[]): boolean {
+  let n = 0;
+  for (const it of items) {
+    if (typeof it?.str !== 'string') continue;
+    const t = it.str.trim();
+    if (t.length > 1 && t.length < 8 && NUN_COMPOSITE.test(t) && /[\u064B-\u0652]/.test(t) && (it.width ?? 0) < 1) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Text-level safety net for the dotted-nun font: removes the junk marks that survived (or were attached to the neighbouring
+    letter instead of the ن) and the false word space in front of the ن ("يمك نِّني" → "يمكنني", "أ نَك" → "أنك"). */
+export function cleanNunJunk(text: string): string {
+  return text
+    .replace(new RegExp(`([${FWD_JOIN}]) ?ن(?=[\u064E-\u0651])[\u064B-\u0652]*`, 'g'), '$1ن')      // letter + (space) + ن + marks
+    .replace(new RegExp(`^ن(?=[\u064E-\u0651])[\u064B-\u0652]*`, 'g'), 'ن')
+    .replace(new RegExp(`(?<=\\s)ن(?=[\u064E-\u0651])[\u064B-\u0652]*`, 'g'), 'ن')
+    .replace(new RegExp(NUN_JUNK, 'g'), '');                                                       // marks glued to another letter
+}
+
 /** Many Arabic PDF fonts map their glyphs to the old "presentation form" code points (U+FB50–FDFF, U+FE70–FEFF) instead of the
     real letters. Phones' fonts usually lack those code points, so harakat / tanween come out as empty boxes ("أخير▯ا") and
     isolated forms break words. Map them back to the real characters (harakat, with or without a kashida, become the plain mark). */
@@ -93,6 +124,7 @@ export function cleanStretch(raw: string): { s: string; before: boolean; after: 
 
 /** All text of a page's items as one string (for search), with the kashida junk removed and no false word breaks. */
 export function itemsToText(items: any[]): string {
+  const dotted = hasDottedNun(items);
   let out = '';
   let glue = false;
   for (const it of items) {
@@ -105,7 +137,8 @@ export function itemsToText(items: any[]): string {
     out += (out && !glue && !c.before ? ' ' : '') + c.s + (it?.hasEOL ? '\n' : '');
     glue = c.after;
   }
-  return out.replace(/\s+/g, ' ');
+  out = out.replace(/\s+/g, ' ');
+  return dotted ? cleanNunJunk(out) : out;
 }
 
 /** Does this line open a new list entry / table-of-contents entry? ("الفصل 3: ..", "الفصل الخامس: ..", "Chapter 4", "1) ..", "• ..")
@@ -121,7 +154,7 @@ function opensEntry(text: string): boolean {
   const rest = t.slice(m[0].length).replace(/^[\s:：.\-–—]+/, '');
   return /^[:：]/.test(t.slice(m[0].length).trim()) || ORDINAL.test(rest) || /^\S+(?:\s+\S+){0,3}\s*[:：]/.test(rest);
 }
-interface Frag { s: string; x: number; y: number; w: number; h: number; kb?: boolean; ka?: boolean }
+interface Frag { s: string; x: number; y: number; w: number; h: number; kb?: boolean; ka?: boolean; nun?: boolean }
 interface Line { y: number; h: number; x0: number; x1: number; text: string; rtl: boolean }
 
 const isRtl = (s: string) => (s.match(RTL_RE)?.length ?? 0) > (s.match(LTR_RE)?.length ?? 0);
@@ -136,6 +169,7 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   const vp = page.getViewport({ scale: 1 });
   const tc = await page.getTextContent();
   page.cleanup?.();
+  const dotted = hasDottedNun(tc.items as any[]);
 
   const oddCount = new Map<string, number>();
   for (const it of tc.items as any[]) {
@@ -174,7 +208,7 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   // gap to its neighbours is measured correctly (a zero width made a false word space before it).
   for (const f of frags) {
     const m = f.s.replace(/\u0640/g, '').trim().match(/^ن[\u064E-\u0651]{1,4}(ا?)$/);
-    if (m) { f.s = 'ن' + m[1]; f.w = Math.max(f.w, f.h * (m[1] ? 0.8 : 0.45)); }
+    if (m) { f.s = 'ن' + m[1]; f.nun = true; f.w = Math.max(f.w, f.h * (m[1] ? 0.8 : 0.45)); }
   }
 
   // a lone "V" / "N" between Arabic words is a glyph the font maps to a Latin letter, not text: drop it (keeps the word space)
@@ -186,6 +220,9 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   }
 
   /* ---- remove kashida junk ("tt") that some fonts produce for the stretch of justified Arabic ---- */
+  // Stand-alone stretch glyphs are zero-width and often share their x with a neighbouring fragment, so sorting could put them on
+  // the wrong side of it. Remember where they are and decide the word joins from geometry instead of from the sort order.
+  const stretches: Array<{ x: number; y: number }> = [];
   {
     const arabic = frags.filter((f) => AR_LETTER.test(f.s));
     const nearArabic = (f: Frag) =>
@@ -193,6 +230,7 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
     for (const f of frags) {
       if (STRETCH_ONLY.test(f.s)) {
         if (nearArabic(f)) {
+          stretches.push({ x: f.x, y: f.y });
           f.s = '';
           f.kb = f.ka = true;
         }
@@ -206,6 +244,9 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
       }
     }
   }
+
+  for (let i = frags.length - 1; i >= 0; i--) if (!frags[i].s) frags.splice(i, 1);
+  if (!frags.length) return { paras: [], chars: 0, endsOpen: false };
 
   /* ---- attach stand-alone diacritics to the letter they sit on ----
      Many PDFs draw harakat as separate glyphs placed above/below the letter. If they were treated as
@@ -273,15 +314,41 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
     const rtl = isRtl(joined);
     gr.sort((a, b) => (rtl ? b.x - a.x : a.x - b.x));
     const h = Math.max(...gr.map((f) => f.h));
+    // 1) word break or not, for each boundary between two fragments
+    const word: boolean[] = [false];
+    const gaps: number[] = [0];
+    for (let k = 1; k < gr.length; k++) {
+      const prev = gr[k - 1], f = gr[k];
+      const gap = rtl ? prev.x - (f.x + f.w) : f.x - (prev.x + prev.w);
+      let lo = rtl ? f.x + f.w : prev.x + prev.w;
+      let hi = rtl ? prev.x : f.x;
+      if (lo > hi) [lo, hi] = [hi, lo];
+      const tol = 0.2 * h;
+      const stretched = stretches.some((st) => Math.abs(st.y - f.y) < 0.6 * h && st.x >= lo - tol && st.x <= hi + tol);
+      gaps.push(gap);
+      // Word gaps are ~0.25em; the gap after Arabic non-joining letters (ا د ذ ر ز و) is far smaller.
+      // the composite ن sits inside its word: after a letter that connects forward there is no word space before it
+      const nunJoin = !!f.nun && gap < 1.2 * h && FWD_JOIN.includes(prev.s.trim().slice(-1));
+      word.push(gap > (rtl ? 0.24 : 0.17) * h && !prev.ka && !f.kb && !stretched && !nunJoin);   // a kashida joins its neighbours: no word space
+    }
+    // 2) a single Arabic letter (not و) is never a word: it belongs to the neighbour it is closest to (justified lines widen the
+    //    gaps inside words: "المرخ ص", "كر ر", "ت غ ير")
+    const arEnd = (t: string) => AR_LETTER.test(t.trim().slice(-1));
+    const arStart = (t: string) => AR_LETTER.test(t.trim().charAt(0));
+    for (let k = 0; k < gr.length; k++) {
+      const t = gr[k].s.trim();
+      if (!STRAY_RE.test(t) || t[0] === '\u0648') continue;
+      const before = k > 0 && arEnd(gr[k - 1].s) ? gaps[k] : Infinity;
+      const after = k + 1 < gr.length && arStart(gr[k + 1].s) ? gaps[k + 1] : Infinity;
+      const near = Math.min(before, after);
+      if (!(near < 0.8 * h)) continue;
+      const far = Math.max(before, after);
+      if (before <= after) word[k] = false; else word[k + 1] = false;
+      if (far < 0.8 * h && far <= near * 1.6 + 0.5) { word[k] = false; if (k + 1 < gr.length) word[k + 1] = false; }
+    }
     let text = '';
     gr.forEach((f, k) => {
-      if (k > 0) {
-        const prev = gr[k - 1];
-        const gap = rtl ? prev.x - (f.x + f.w) : f.x - (prev.x + prev.w);
-        // Word gaps are ~0.25em; the gap after Arabic non-joining letters (ا د ذ ر ز و) is far smaller.
-        const word = gap > (rtl ? 0.24 : 0.17) * h && !prev.ka && !f.kb;   // a kashida joins its neighbours: no word space
-        if (word && !text.endsWith(' ') && !f.s.startsWith(' ') && !MARK_ONLY.test(f.s[0])) text += ' ';
-      }
+      if (k > 0 && word[k] && !text.endsWith(' ') && !f.s.startsWith(' ') && !MARK_ONLY.test(f.s[0])) text += ' ';
       text += f.s;
     });
     return {
@@ -364,7 +431,9 @@ export async function extractPage(doc: any, num: number): Promise<PageText> {
   const paras: Para[] = raws
     .map((r) => {
       // a fathatan always sits on the letter before the final alef (عملًا): put a misplaced one back
-      const text = r.text.normalize('NFKC').replace(/\s+/g, ' ').trim()
+      const text = (dotted ? cleanNunJunk(r.text.normalize('NFKC')) : r.text.normalize('NFKC')).replace(/\s+/g, ' ').trim()
+        // "غيرً": the stretch glyph after ير is read as a tanween
+        .replace(/(?<=\u064A\u0631)\u064B(?![\u0621-\u064A])/g, '')
         .replace(/\u064B([\u0621-\u0648\u064A]{1,8})\u0627(?![\u0621-\u064A])/g, '$1\u064B\u0627')
         // an Arabic word glued to a Latin one (الدالةprint()، عبارةif): the PDF's gap between them is lost
         .replace(/([\u0621-\u064A])(?=[A-Za-z])/g, '$1 ')
@@ -400,7 +469,7 @@ export async function scanPdfIssues(
     ['box / replacement / private-use char', /[\uE000-\uF8FF\uFFFD\u25A0-\u25AF\u0080-\u009F]/],
     ['mark after space or punctuation', /[\s.,،؛:!؟?(][\u064B-\u0652]/],
     ['two different marks in a row', /[\u064B-\u0650][\u064B-\u0652]/],
-    ['single Arabic letter between spaces', /(?:^|\s)[\u0621-\u0640\u0642-\u064A](?=\s|$)/],
+    ['single Arabic letter between spaces', /(?:^|\s)[\u0621-\u0640\u0642-\u0647\u0649\u064A](?=\s|$)/],
     ['presentation-form code point left', /[\uFB50-\uFDFF\uFE70-\uFEFF]/],
   ];
   const suspCount = new Map<string, number>();

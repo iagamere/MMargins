@@ -453,7 +453,7 @@ export function ReflowView(props: ReflowViewProps) {
     (async () => {
       try {
         await loadPdfjs();
-        let bytes = new Uint8Array(P.current.data.slice(0));
+        let bytes: Uint8Array<ArrayBufferLike> = new Uint8Array(P.current.data.slice(0));
         if (bytes.byteLength < 80 * 1024 * 1024) {
           // Repair reversed Arabic ligatures (لا / لأ …) before text extraction.
           try {

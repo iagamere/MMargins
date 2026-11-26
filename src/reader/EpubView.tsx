@@ -292,7 +292,8 @@ export function EpubView(props: EpubViewProps) {
         );
         ro.observe(host);
 
-        P.current.onReady({ toc, api });
+        const getApi = () => api;
+        P.current.onReady({ toc, api: getApi() });
 
         /* ----- background: reading-progress locations ----- */
         (async () => {
